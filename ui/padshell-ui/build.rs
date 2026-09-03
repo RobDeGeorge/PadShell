@@ -6,6 +6,7 @@ fn main() {
             "qml/Main.qml",
             "qml/BindingsView.qml",
             "qml/LiveMonitorView.qml",
+            "qml/HapticsView.qml",
             "qml/components/ButtonIndicator.qml",
             "qml/components/StickPad.qml",
             "qml/components/AnalogBar.qml",
@@ -14,5 +15,6 @@ fn main() {
     )
     .file("src/config_bridge.rs")
     .file("src/live_bridge.rs")
+    .file("src/haptics_bridge.rs")
     .build();
 }

@@ -21,6 +21,10 @@ ApplicationWindow {
         Component.onCompleted: start()
     }
 
+    HapticsBridge {
+        id: hapticsBridge
+    }
+
     ColumnLayout {
         anchors.fill: parent
         spacing: 0
@@ -31,6 +35,7 @@ ApplicationWindow {
 
             TabButton { text: "Live Monitor" }
             TabButton { text: "Bindings" }
+            TabButton { text: "Haptics" }
         }
 
         StackLayout {
@@ -44,6 +49,10 @@ ApplicationWindow {
 
             BindingsView {
                 config: configBridge
+            }
+
+            HapticsView {
+                haptics: hapticsBridge
             }
         }
     }

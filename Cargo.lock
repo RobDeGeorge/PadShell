@@ -749,6 +749,7 @@ dependencies = [
  "padshell-core",
  "padshell-hid",
  "padshell-output",
+ "serde",
  "serde_json",
  "toml",
  "tracing",

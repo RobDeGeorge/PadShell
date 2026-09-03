@@ -5,7 +5,7 @@ use std::path::PathBuf;
 
 use clap::{Parser, Subcommand};
 use padshell_hid::device::{self};
-use padshell_hid::ds4::{Ds4BtParser, Ds4UsbParser, DS4_PRODUCT_ID_V1, DS4_PRODUCT_ID_V2, DS4_VENDOR_ID};
+use padshell_hid::ds4::{Ds4BtParser, Ds4UsbParser};
 use padshell_hid::{ControllerReportParser, HapticsController};
 
 #[derive(Parser)]
@@ -124,13 +124,7 @@ fn main() -> anyhow::Result<()> {
 }
 
 fn find_haptics() -> anyhow::Result<HapticsController> {
-    let mut candidates = device::find_all(DS4_VENDOR_ID, DS4_PRODUCT_ID_V1)?;
-    candidates.extend(device::find_all(DS4_VENDOR_ID, DS4_PRODUCT_ID_V2)?);
-    let info = candidates
-        .into_iter()
-        .next()
-        .ok_or_else(|| anyhow::anyhow!("no DS4 controller found"))?;
-    Ok(HapticsController::discover(&info.hid_syspath))
+    HapticsController::discover_ds4().ok_or_else(|| anyhow::anyhow!("no DS4 controller found"))
 }
 
 fn expand_tilde(path: &str) -> PathBuf {

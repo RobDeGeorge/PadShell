@@ -1,4 +1,5 @@
 mod config_bridge;
+mod haptics_bridge;
 mod live_bridge;
 
 use cxx_qt_lib::{QGuiApplication, QQmlApplicationEngine, QString, QUrl};
