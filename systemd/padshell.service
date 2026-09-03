@@ -1,0 +1,9 @@
+[Unit]
+Description=padshell - DS4 controller as virtual keyboard/mouse
+
+[Service]
+ExecStart=%h/.cargo/bin/padshell run
+Restart=on-failure
+
+[Install]
+WantedBy=default.target

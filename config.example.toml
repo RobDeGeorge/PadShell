@@ -1,0 +1,71 @@
+schema_version = 1
+
+[settings]
+poll_hz = 250
+stick_deadzone = 0.08
+
+# ---- Mouse-mode layer: hold L1 to move the cursor with the right stick ----
+[[layers]]
+name = "mouse"
+activate = { button = "l1", mode = "hold" }
+
+  [layers.stick_mouse]
+  stick = "right"
+  sensitivity = 900.0
+  accel_curve = "quadratic"
+
+  [layers.scroll]
+  stick = "left"
+  axis = "y"
+  sensitivity = 20.0
+
+  [[layers.bindings]]
+  input = "r2"
+  action = { type = "mouse_button", button = "left" }
+
+  [[layers.bindings]]
+  input = "l2"
+  action = { type = "mouse_button", button = "right" }
+
+# ---- Default layer bindings ----
+[[bindings]]
+input = "cross"
+action = { type = "key", key = "space" }
+
+[[bindings]]
+input = "triangle"
+action = { type = "key", key = "enter" }
+
+[[bindings]]
+input = "circle"
+action = { type = "key", key = "escape" }
+
+[[bindings]]
+input = "dpad_up"
+action = { type = "key", key = "up" }
+
+[[bindings]]
+input = "dpad_down"
+action = { type = "key", key = "down" }
+
+[[bindings]]
+input = "dpad_left"
+action = { type = "key", key = "left" }
+
+[[bindings]]
+input = "dpad_right"
+action = { type = "key", key = "right" }
+
+[[bindings]]
+input = { combo = ["l1", "r1"] }
+action = { type = "key_combo", keys = ["super", "q"] }
+
+[[bindings]]
+input = "square"
+action = { type = "macro", name = "screenshot" }
+
+[[macros]]
+name = "screenshot"
+steps = [
+  { type = "key_combo", keys = ["super", "shift", "s"] },
+]

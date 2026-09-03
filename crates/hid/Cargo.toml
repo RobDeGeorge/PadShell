@@ -1,0 +1,11 @@
+[package]
+name = "padshell-hid"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+padshell-core.workspace = true
+nix.workspace = true
+udev.workspace = true
+thiserror.workspace = true
+tracing.workspace = true

@@ -1,0 +1,32 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/core",
+    "crates/hid",
+    "crates/binding",
+    "crates/output",
+    "bin/padshell",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+
+[workspace.dependencies]
+padshell-core = { path = "crates/core" }
+padshell-hid = { path = "crates/hid" }
+padshell-binding = { path = "crates/binding" }
+padshell-output = { path = "crates/output" }
+
+serde = { version = "1", features = ["derive"] }
+toml = "1"
+thiserror = "1"
+anyhow = "1"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+clap = { version = "4", features = ["derive"] }
+nix = { version = "0.29", features = ["ioctl", "fs"] }
+udev = "0.9"
+notify = "6.1"
+input-linux = "0.7"
+arc-swap = "1"

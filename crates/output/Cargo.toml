@@ -1,0 +1,10 @@
+[package]
+name = "padshell-output"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+padshell-core.workspace = true
+input-linux.workspace = true
+thiserror.workspace = true
+tracing.workspace = true

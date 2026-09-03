@@ -1,0 +1,8 @@
+# Grants the "input" group access to the DS4's hidraw device and to
+# /dev/uinput, so padshell doesn't need to run as root.
+# Install: sudo cp 99-padshell.rules /etc/udev/rules.d/ && sudo udevadm control --reload-rules && sudo udevadm trigger
+# Then: sudo usermod -aG input $USER  (log out/in to take effect)
+
+KERNEL=="hidraw*", ATTRS{idVendor}=="054c", ATTRS{idProduct}=="05c4", MODE="0660", GROUP="input", TAG+="uaccess"
+KERNEL=="hidraw*", ATTRS{idVendor}=="054c", ATTRS{idProduct}=="09cc", MODE="0660", GROUP="input", TAG+="uaccess"
+KERNEL=="uinput", MODE="0660", GROUP="input", OPTIONS+="static_node=uinput"

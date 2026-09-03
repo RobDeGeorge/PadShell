@@ -1,0 +1,331 @@
+//! The binding engine: turns a stream of ControllerState snapshots into
+//! OutputEvents according to the loaded config's bindings, layers, and
+//! macros.
+
+use std::collections::HashSet;
+use std::time::Duration;
+
+use padshell_core::{ButtonId, ButtonSet, ControllerState, MouseButton, OutputEvent, StickId};
+
+use crate::config::{Action, Binding, Config, InputSpec};
+use crate::curve::{apply_deadzone, axis_to_velocity};
+use crate::layer::LayerSwitch;
+use crate::macro_::{self, PlaybackItem};
+
+/// Output of one engine tick: either an immediate event to inject, or a
+/// macro's expanded playback timeline for the caller to schedule (macros
+/// have delays, so they aren't emitted synchronously).
+pub enum EngineAction {
+    Emit(OutputEvent),
+    PlayMacro(Vec<PlaybackItem>),
+}
+
+struct LayerRuntime {
+    switch: LayerSwitch,
+    definition: crate::config::Layer,
+}
+
+pub struct BindingEngine {
+    config: Config,
+    layers: Vec<LayerRuntime>,
+    prev_buttons: ButtonSet,
+}
+
+impl BindingEngine {
+    pub fn new(config: Config) -> Self {
+        let layers = config
+            .layers
+            .iter()
+            .map(|layer| LayerRuntime {
+                switch: LayerSwitch::new(layer.activate.mode),
+                definition: layer.clone(),
+            })
+            .collect();
+        BindingEngine {
+            config,
+            layers,
+            prev_buttons: ButtonSet::empty(),
+        }
+    }
+
+    /// Replace the config in place (used for hot reload). Layer switch
+    /// state resets, which is fine - a config edit is a rare, deliberate
+    /// event and stale "held" state across a reload would be surprising.
+    pub fn reload(&mut self, config: Config) {
+        *self = BindingEngine::new(config);
+    }
+
+    pub fn config(&self) -> &Config {
+        &self.config
+    }
+
+    /// Process one controller state snapshot. `dt` is the time elapsed
+    /// since the previous tick, used for mouse-mode velocity integration.
+    pub fn tick(&mut self, state: &ControllerState, dt: Duration) -> Vec<EngineAction> {
+        let mut actions = Vec::new();
+        let prev_buttons = self.prev_buttons;
+        let cur_buttons = state.buttons;
+
+        // Update layer activation state first, so this tick's bindings
+        // already reflect any layer switch triggered by this tick's edge.
+        let deadzone = self.config.settings.stick_deadzone;
+        for layer_rt in &mut self.layers {
+            let Ok(button) = layer_rt.definition.activate.button_id() else {
+                continue;
+            };
+            let is_pressed = cur_buttons.is_pressed(button);
+            let is_press_edge = is_pressed && !prev_buttons.is_pressed(button);
+            layer_rt.switch.on_tick(is_pressed, is_press_edge);
+        }
+
+        // Active layer bindings take priority over the default layer;
+        // last-activated wins if somehow multiple are active at once.
+        let mut handled: HashSet<String> = HashSet::new();
+        for layer_rt in self.layers.iter().rev() {
+            if !layer_rt.switch.is_active() {
+                continue;
+            }
+            self.dispatch_bindings(
+                &layer_rt.definition.bindings,
+                &prev_buttons,
+                &cur_buttons,
+                &mut handled,
+                &mut actions,
+            );
+            if let Some(sm) = &layer_rt.definition.stick_mouse {
+                emit_stick_mouse(sm, state, deadzone, dt, &mut actions);
+            }
+            if let Some(sc) = &layer_rt.definition.scroll {
+                emit_scroll(sc, state, deadzone, dt, &mut actions);
+            }
+            // Only the highest-priority active layer's bindings apply.
+            break;
+        }
+
+        self.dispatch_bindings(
+            &self.config.bindings,
+            &prev_buttons,
+            &cur_buttons,
+            &mut handled,
+            &mut actions,
+        );
+
+        self.prev_buttons = cur_buttons;
+        actions
+    }
+
+    fn dispatch_bindings(
+        &self,
+        bindings: &[Binding],
+        prev: &ButtonSet,
+        cur: &ButtonSet,
+        handled: &mut HashSet<String>,
+        actions: &mut Vec<EngineAction>,
+    ) {
+        // Combos first, so their member buttons don't also fire their
+        // single-button bindings on the same edge.
+        for binding in bindings.iter().filter(|b| is_combo(&b.input)) {
+            if combo_press_edge(&binding.input, prev, cur) {
+                for name in binding.input.buttons() {
+                    handled.insert(name.to_string());
+                }
+                self.fire_action(&binding.action, actions);
+            }
+        }
+
+        for binding in bindings.iter().filter(|b| !is_combo(&b.input)) {
+            let InputSpec::Single(name) = &binding.input else {
+                continue;
+            };
+            let Some(button) = ButtonId::from_str(name) else {
+                continue;
+            };
+            if handled.contains(name) {
+                continue;
+            }
+            if cur.is_pressed(button) && !prev.is_pressed(button) {
+                self.fire_action(&binding.action, actions);
+            }
+        }
+    }
+
+    fn fire_action(&self, action: &Action, actions: &mut Vec<EngineAction>) {
+        match action {
+            Action::Key { key } => {
+                actions.push(EngineAction::Emit(OutputEvent::KeyTap(vec![key.clone()])));
+            }
+            Action::KeyCombo { keys } => {
+                actions.push(EngineAction::Emit(OutputEvent::KeyTap(keys.clone())));
+            }
+            Action::Macro { name } => {
+                if let Some(macro_def) = self.config.macros.iter().find(|m| &m.name == name) {
+                    actions.push(EngineAction::PlayMacro(macro_::expand(macro_def)));
+                } else {
+                    tracing::warn!(macro_name = %name, "binding references unknown macro");
+                }
+            }
+            Action::MouseButton { button } => {
+                if let Some(mb) = MouseButton::from_str(button) {
+                    actions.push(EngineAction::Emit(OutputEvent::MouseButtonDown(mb)));
+                    actions.push(EngineAction::Emit(OutputEvent::MouseButtonUp(mb)));
+                } else {
+                    tracing::warn!(button = %button, "unknown mouse button name in config");
+                }
+            }
+        }
+    }
+}
+
+fn is_combo(input: &InputSpec) -> bool {
+    matches!(input, InputSpec::Combo { .. })
+}
+
+fn combo_press_edge(input: &InputSpec, prev: &ButtonSet, cur: &ButtonSet) -> bool {
+    let buttons: Vec<ButtonId> = input.buttons().iter().filter_map(|s| ButtonId::from_str(s)).collect();
+    if buttons.is_empty() {
+        return false;
+    }
+    let all_pressed_now = buttons.iter().all(|&b| cur.is_pressed(b));
+    let all_pressed_before = buttons.iter().all(|&b| prev.is_pressed(b));
+    all_pressed_now && !all_pressed_before
+}
+
+fn emit_stick_mouse(
+    sm: &crate::config::StickMouse,
+    state: &ControllerState,
+    deadzone: f32,
+    dt: Duration,
+    actions: &mut Vec<EngineAction>,
+) {
+    let Some(stick) = StickId::from_str(&sm.stick) else {
+        return;
+    };
+    let pos = match stick {
+        StickId::Left => state.left_stick,
+        StickId::Right => state.right_stick,
+    };
+    let x = apply_deadzone(pos.x, deadzone);
+    let y = apply_deadzone(pos.y, deadzone);
+    if x == 0.0 && y == 0.0 {
+        return;
+    }
+    let dt_secs = dt.as_secs_f32();
+    let dx = axis_to_velocity(x, sm.sensitivity, &sm.accel_curve) * dt_secs;
+    let dy = axis_to_velocity(y, sm.sensitivity, &sm.accel_curve) * dt_secs;
+    actions.push(EngineAction::Emit(OutputEvent::MouseMove { dx, dy }));
+}
+
+fn emit_scroll(
+    sc: &crate::config::Scroll,
+    state: &ControllerState,
+    deadzone: f32,
+    dt: Duration,
+    actions: &mut Vec<EngineAction>,
+) {
+    let Some(stick) = StickId::from_str(&sc.stick) else {
+        return;
+    };
+    let pos = match stick {
+        StickId::Left => state.left_stick,
+        StickId::Right => state.right_stick,
+    };
+    let axis_value = if sc.axis == "x" { pos.x } else { pos.y };
+    let value = apply_deadzone(axis_value, deadzone);
+    if value == 0.0 {
+        return;
+    }
+    let dt_secs = dt.as_secs_f32();
+    let delta = value * sc.sensitivity * dt_secs;
+    if sc.axis == "x" {
+        actions.push(EngineAction::Emit(OutputEvent::Scroll { dx: delta, dy: 0.0 }));
+    } else {
+        actions.push(EngineAction::Emit(OutputEvent::Scroll { dx: 0.0, dy: delta }));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::Config;
+
+    fn state_with_buttons(buttons: &[ButtonId]) -> ControllerState {
+        let mut bs = ButtonSet::empty();
+        for &b in buttons {
+            bs.set(b, true);
+        }
+        ControllerState {
+            buttons: bs,
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn single_binding_fires_on_press_edge_only() {
+        let config = Config::from_str(
+            r#"
+schema_version = 1
+[[bindings]]
+input = "cross"
+action = { type = "key", key = "space" }
+"#,
+        )
+        .unwrap();
+        let mut engine = BindingEngine::new(config);
+
+        let pressed = state_with_buttons(&[ButtonId::Cross]);
+        let actions = engine.tick(&pressed, Duration::from_millis(4));
+        assert_eq!(actions.len(), 1);
+
+        // holding, no new edge -> no repeat
+        let actions = engine.tick(&pressed, Duration::from_millis(4));
+        assert_eq!(actions.len(), 0);
+    }
+
+    #[test]
+    fn combo_fires_instead_of_member_single_bindings() {
+        let config = Config::from_str(
+            r#"
+schema_version = 1
+[[bindings]]
+input = { combo = ["l1", "r1"] }
+action = { type = "key_combo", keys = ["super", "q"] }
+
+[[bindings]]
+input = "l1"
+action = { type = "key", key = "a" }
+"#,
+        )
+        .unwrap();
+        let mut engine = BindingEngine::new(config);
+
+        let both = state_with_buttons(&[ButtonId::L1, ButtonId::R1]);
+        let actions = engine.tick(&both, Duration::from_millis(4));
+        assert_eq!(actions.len(), 1); // only the combo fires, not the l1 single binding
+    }
+
+    #[test]
+    fn hold_layer_activates_and_deactivates() {
+        let config = Config::from_str(
+            r#"
+schema_version = 1
+[[layers]]
+name = "mouse"
+activate = { button = "l1", mode = "hold" }
+
+  [[layers.bindings]]
+  input = "r2"
+  action = { type = "mouse_button", button = "left" }
+"#,
+        )
+        .unwrap();
+        let mut engine = BindingEngine::new(config);
+
+        let l1_and_r2 = state_with_buttons(&[ButtonId::L1, ButtonId::R2]);
+        let actions = engine.tick(&l1_and_r2, Duration::from_millis(4));
+        assert_eq!(actions.len(), 2); // mouse button down + up
+
+        let r2_only = state_with_buttons(&[ButtonId::R2]);
+        let actions = engine.tick(&r2_only, Duration::from_millis(4));
+        assert_eq!(actions.len(), 0); // layer deactivated, r2 binding no longer applies
+    }
+}
