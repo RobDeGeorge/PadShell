@@ -4,9 +4,9 @@ mod daemon;
 use std::path::PathBuf;
 
 use clap::{Parser, Subcommand};
-use padshell_hid::device;
-use padshell_hid::ds4::{Ds4BtParser, Ds4UsbParser};
-use padshell_hid::ControllerReportParser;
+use padshell_hid::device::{self};
+use padshell_hid::ds4::{Ds4BtParser, Ds4UsbParser, DS4_PRODUCT_ID_V1, DS4_PRODUCT_ID_V2, DS4_VENDOR_ID};
+use padshell_hid::{ControllerReportParser, HapticsController};
 
 #[derive(Parser)]
 #[command(name = "padshell", about = "Drive a Linux desktop with a game controller")]
@@ -40,6 +40,25 @@ enum Command {
         /// Parse as a Bluetooth (report ID 0x11) report instead of USB.
         #[arg(long)]
         bt: bool,
+    },
+    /// Rumble the controller for a duration, then stop. Goes through the
+    /// kernel's evdev force-feedback API, not a raw HID output report.
+    Rumble {
+        /// Weak/high-frequency motor magnitude (0-65535).
+        #[arg(default_value = "32000")]
+        weak: u16,
+        /// Strong/low-frequency motor magnitude (0-65535).
+        #[arg(default_value = "32000")]
+        strong: u16,
+        #[arg(long, default_value = "500")]
+        duration_ms: u16,
+    },
+    /// Set the lightbar color (0-255 each) via the kernel LED subsystem.
+    /// Stays set until changed again or the controller reconnects.
+    Lightbar {
+        r: u8,
+        g: u8,
+        b: u8,
     },
 }
 
@@ -85,7 +104,33 @@ fn main() -> anyhow::Result<()> {
                 None => anyhow::bail!("report at {path:?} could not be parsed (too short or wrong report ID)"),
             }
         }
+        Command::Rumble { weak, strong, duration_ms } => {
+            let haptics = find_haptics()?;
+            if !haptics.has_rumble() {
+                anyhow::bail!("no force-feedback capable device found for the connected controller");
+            }
+            haptics.rumble(weak, strong, duration_ms)?;
+            Ok(())
+        }
+        Command::Lightbar { r, g, b } => {
+            let haptics = find_haptics()?;
+            if !haptics.has_lightbar() {
+                anyhow::bail!("no lightbar LEDs found for the connected controller");
+            }
+            haptics.set_lightbar(r, g, b)?;
+            Ok(())
+        }
     }
+}
+
+fn find_haptics() -> anyhow::Result<HapticsController> {
+    let mut candidates = device::find_all(DS4_VENDOR_ID, DS4_PRODUCT_ID_V1)?;
+    candidates.extend(device::find_all(DS4_VENDOR_ID, DS4_PRODUCT_ID_V2)?);
+    let info = candidates
+        .into_iter()
+        .next()
+        .ok_or_else(|| anyhow::anyhow!("no DS4 controller found"))?;
+    Ok(HapticsController::discover(&info.hid_syspath))
 }
 
 fn expand_tilde(path: &str) -> PathBuf {

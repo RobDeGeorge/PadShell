@@ -9,3 +9,4 @@ nix.workspace = true
 udev.workspace = true
 thiserror.workspace = true
 tracing.workspace = true
+evdev.workspace = true

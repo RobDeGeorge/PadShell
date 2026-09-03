@@ -75,17 +75,21 @@ pub fn lookup(name: &str) -> Option<Key> {
     Some(key)
 }
 
+/// Canonical name for every key `lookup` recognizes - the single source
+/// of truth for both uinput registration and any UI that wants to offer
+/// a dropdown of valid key names (a "b"/"leftshift" pair like that has
+/// two spellings in `lookup` for ergonomics; this list has one canonical
+/// entry per key so a dropdown doesn't show duplicates).
+pub const KEY_NAMES: &[&str] = &[
+    "a", "b", "c", "d", "e", "f", "g", "h", "i", "j", "k", "l", "m", "n", "o", "p", "q", "r", "s",
+    "t", "u", "v", "w", "x", "y", "z", "0", "1", "2", "3", "4", "5", "6", "7", "8", "9", "space",
+    "enter", "escape", "tab", "backspace", "up", "down", "left", "right", "leftshift",
+    "rightshift", "leftctrl", "rightctrl", "leftalt", "rightalt", "leftmeta", "rightmeta", "f1",
+    "f2", "f3", "f4", "f5", "f6", "f7", "f8", "f9", "f10", "f11", "f12",
+];
+
 /// All key codes this virtual device may ever emit, for UI_SET_KEYBIT
 /// registration at device-creation time.
 pub fn all_supported_keys() -> Vec<Key> {
-    // Cheap way to get every key `lookup` can produce without listing it
-    // twice: try every name we recognize above.
-    const NAMES: &[&str] = &[
-        "a", "b", "c", "d", "e", "f", "g", "h", "i", "j", "k", "l", "m", "n", "o", "p", "q", "r",
-        "s", "t", "u", "v", "w", "x", "y", "z", "0", "1", "2", "3", "4", "5", "6", "7", "8", "9",
-        "space", "enter", "escape", "tab", "backspace", "up", "down", "left", "right",
-        "leftshift", "rightshift", "leftctrl", "rightctrl", "leftalt", "rightalt", "leftmeta",
-        "rightmeta", "f1", "f2", "f3", "f4", "f5", "f6", "f7", "f8", "f9", "f10", "f11", "f12",
-    ];
-    NAMES.iter().filter_map(|n| lookup(n)).collect()
+    KEY_NAMES.iter().filter_map(|n| lookup(n)).collect()
 }

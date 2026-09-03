@@ -41,6 +41,11 @@ pub struct HidrawInfo {
     pub vendor_id: u16,
     pub product_id: u16,
     pub bus: BusType,
+    /// Sysfs path of the parent HID device (e.g.
+    /// `/sys/bus/hid/devices/0005:054C:09CC.0016`) - used to locate the
+    /// device's lightbar LEDs and force-feedback evdev node, which live
+    /// under this same HID device rather than the hidraw node itself.
+    pub hid_syspath: PathBuf,
 }
 
 /// List every /dev/hidraw* device along with its HID vendor/product ID
@@ -74,6 +79,7 @@ pub fn enumerate() -> Result<Vec<HidrawInfo>, HidError> {
             vendor_id: ids.0,
             product_id: ids.1,
             bus: BusType::from_code(ids.2),
+            hid_syspath: hid_parent.syspath().to_path_buf(),
         });
     }
 

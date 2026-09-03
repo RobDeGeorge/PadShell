@@ -6,3 +6,7 @@
 KERNEL=="hidraw*", ATTRS{idVendor}=="054c", ATTRS{idProduct}=="05c4", MODE="0660", GROUP="input", TAG+="uaccess"
 KERNEL=="hidraw*", ATTRS{idVendor}=="054c", ATTRS{idProduct}=="09cc", MODE="0660", GROUP="input", TAG+="uaccess"
 KERNEL=="uinput", MODE="0660", GROUP="input", OPTIONS+="static_node=uinput"
+
+# DS4 lightbar brightness files (used for RGB color control) - these are
+# plain sysfs LED class attributes owned by root:root by default.
+SUBSYSTEM=="leds", KERNEL=="input*:*", RUN+="/bin/sh -c 'chgrp input /sys%p/brightness; chmod g+w /sys%p/brightness'"
