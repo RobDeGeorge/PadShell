@@ -2,7 +2,7 @@
 //! OutputEvents according to the loaded config's bindings, layers, and
 //! macros.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::time::Duration;
 
 use padshell_core::{ButtonId, ButtonSet, ControllerState, MouseButton, OutputEvent, StickId};
@@ -25,10 +25,41 @@ struct LayerRuntime {
     definition: crate::config::Layer,
 }
 
+/// Accumulates sub-pixel motion across ticks so slow stick deflection
+/// (or a low scroll sensitivity) still eventually emits whole-unit
+/// deltas instead of always rounding to zero.
+#[derive(Default)]
+struct MotionAccumulator {
+    x: f32,
+    y: f32,
+}
+
+impl MotionAccumulator {
+    /// Adds a fractional delta and returns the whole-unit part to emit
+    /// now, keeping the remainder for next time.
+    fn step(&mut self, dx: f32, dy: f32) -> (f32, f32) {
+        self.x += dx;
+        self.y += dy;
+        let out_x = self.x.trunc();
+        let out_y = self.y.trunc();
+        self.x -= out_x;
+        self.y -= out_y;
+        (out_x, out_y)
+    }
+}
+
 pub struct BindingEngine {
     config: Config,
     layers: Vec<LayerRuntime>,
     prev_buttons: ButtonSet,
+    /// Mouse buttons currently held down, keyed by the physical
+    /// controller button that pressed them, so a release fires even if
+    /// the layer that bound it has since deactivated (avoids a stuck
+    /// virtual mouse button when the user releases the layer-hold key
+    /// before the mouse button).
+    held_mouse_buttons: HashMap<ButtonId, MouseButton>,
+    mouse_move_accum: MotionAccumulator,
+    scroll_accum: MotionAccumulator,
 }
 
 impl BindingEngine {
@@ -45,6 +76,9 @@ impl BindingEngine {
             config,
             layers,
             prev_buttons: ButtonSet::empty(),
+            held_mouse_buttons: HashMap::new(),
+            mouse_move_accum: MotionAccumulator::default(),
+            scroll_accum: MotionAccumulator::default(),
         }
     }
 
@@ -66,6 +100,19 @@ impl BindingEngine {
         let prev_buttons = self.prev_buttons;
         let cur_buttons = state.buttons;
 
+        // Release any mouse button whose triggering controller button is
+        // no longer physically pressed, regardless of layer state - this
+        // is what makes press-and-hold-to-drag work, and avoids a stuck
+        // virtual button if the user releases the layer-hold key first.
+        self.held_mouse_buttons.retain(|&trigger, &mut mb| {
+            if cur_buttons.is_pressed(trigger) {
+                true
+            } else {
+                actions.push(EngineAction::Emit(OutputEvent::MouseButtonUp(mb)));
+                false
+            }
+        });
+
         // Update layer activation state first, so this tick's bindings
         // already reflect any layer switch triggered by this tick's edge.
         let deadzone = self.config.settings.stick_deadzone;
@@ -85,7 +132,9 @@ impl BindingEngine {
             if !layer_rt.switch.is_active() {
                 continue;
             }
-            self.dispatch_bindings(
+            dispatch_bindings(
+                &self.config,
+                &mut self.held_mouse_buttons,
                 &layer_rt.definition.bindings,
                 &prev_buttons,
                 &cur_buttons,
@@ -93,16 +142,18 @@ impl BindingEngine {
                 &mut actions,
             );
             if let Some(sm) = &layer_rt.definition.stick_mouse {
-                emit_stick_mouse(sm, state, deadzone, dt, &mut actions);
+                emit_stick_mouse(sm, state, deadzone, dt, &mut self.mouse_move_accum, &mut actions);
             }
             if let Some(sc) = &layer_rt.definition.scroll {
-                emit_scroll(sc, state, deadzone, dt, &mut actions);
+                emit_scroll(sc, state, deadzone, dt, &mut self.scroll_accum, &mut actions);
             }
             // Only the highest-priority active layer's bindings apply.
             break;
         }
 
-        self.dispatch_bindings(
+        dispatch_bindings(
+            &self.config,
+            &mut self.held_mouse_buttons,
             &self.config.bindings,
             &prev_buttons,
             &cur_buttons,
@@ -113,64 +164,80 @@ impl BindingEngine {
         self.prev_buttons = cur_buttons;
         actions
     }
+}
 
-    fn dispatch_bindings(
-        &self,
-        bindings: &[Binding],
-        prev: &ButtonSet,
-        cur: &ButtonSet,
-        handled: &mut HashSet<String>,
-        actions: &mut Vec<EngineAction>,
-    ) {
-        // Combos first, so their member buttons don't also fire their
-        // single-button bindings on the same edge.
-        for binding in bindings.iter().filter(|b| is_combo(&b.input)) {
-            if combo_press_edge(&binding.input, prev, cur) {
-                for name in binding.input.buttons() {
-                    handled.insert(name.to_string());
-                }
-                self.fire_action(&binding.action, actions);
+/// Dispatches a binding list's press-edge actions. A free function (not
+/// a method) because it needs to mutably borrow `held_mouse_buttons`
+/// while `self.config` is only borrowed immutably, which a method
+/// taking `&mut self` can't express.
+fn dispatch_bindings(
+    config: &Config,
+    held_mouse_buttons: &mut HashMap<ButtonId, MouseButton>,
+    bindings: &[Binding],
+    prev: &ButtonSet,
+    cur: &ButtonSet,
+    handled: &mut HashSet<String>,
+    actions: &mut Vec<EngineAction>,
+) {
+    // Combos first, so their member buttons don't also fire their
+    // single-button bindings on the same edge.
+    for binding in bindings.iter().filter(|b| is_combo(&b.input)) {
+        if combo_press_edge(&binding.input, prev, cur) {
+            for name in binding.input.buttons() {
+                handled.insert(name.to_string());
             }
-        }
-
-        for binding in bindings.iter().filter(|b| !is_combo(&b.input)) {
-            let InputSpec::Single(name) = &binding.input else {
-                continue;
-            };
-            let Some(button) = ButtonId::from_str(name) else {
-                continue;
-            };
-            if handled.contains(name) {
-                continue;
-            }
-            if cur.is_pressed(button) && !prev.is_pressed(button) {
-                self.fire_action(&binding.action, actions);
-            }
+            // Combos always tap (down+up together) - hold-to-drag via a
+            // combo isn't supported in v1, only single-button bindings.
+            fire_action_tap(config, &binding.action, actions);
         }
     }
 
-    fn fire_action(&self, action: &Action, actions: &mut Vec<EngineAction>) {
-        match action {
-            Action::Key { key } => {
-                actions.push(EngineAction::Emit(OutputEvent::KeyTap(vec![key.clone()])));
-            }
-            Action::KeyCombo { keys } => {
-                actions.push(EngineAction::Emit(OutputEvent::KeyTap(keys.clone())));
-            }
-            Action::Macro { name } => {
-                if let Some(macro_def) = self.config.macros.iter().find(|m| &m.name == name) {
-                    actions.push(EngineAction::PlayMacro(macro_::expand(macro_def)));
-                } else {
-                    tracing::warn!(macro_name = %name, "binding references unknown macro");
-                }
-            }
-            Action::MouseButton { button } => {
-                if let Some(mb) = MouseButton::from_str(button) {
+    for binding in bindings.iter().filter(|b| !is_combo(&b.input)) {
+        let InputSpec::Single(name) = &binding.input else {
+            continue;
+        };
+        let Some(button) = ButtonId::from_str(name) else {
+            continue;
+        };
+        if handled.contains(name) {
+            continue;
+        }
+        if cur.is_pressed(button) && !prev.is_pressed(button) {
+            if let Action::MouseButton { button: mb_name } = &binding.action {
+                if let Some(mb) = MouseButton::from_str(mb_name) {
                     actions.push(EngineAction::Emit(OutputEvent::MouseButtonDown(mb)));
-                    actions.push(EngineAction::Emit(OutputEvent::MouseButtonUp(mb)));
+                    held_mouse_buttons.insert(button, mb);
                 } else {
-                    tracing::warn!(button = %button, "unknown mouse button name in config");
+                    tracing::warn!(button = %mb_name, "unknown mouse button name in config");
                 }
+            } else {
+                fire_action_tap(config, &binding.action, actions);
+            }
+        }
+    }
+}
+
+fn fire_action_tap(config: &Config, action: &Action, actions: &mut Vec<EngineAction>) {
+    match action {
+        Action::Key { key } => {
+            actions.push(EngineAction::Emit(OutputEvent::KeyTap(vec![key.clone()])));
+        }
+        Action::KeyCombo { keys } => {
+            actions.push(EngineAction::Emit(OutputEvent::KeyTap(keys.clone())));
+        }
+        Action::Macro { name } => {
+            if let Some(macro_def) = config.macros.iter().find(|m| &m.name == name) {
+                actions.push(EngineAction::PlayMacro(macro_::expand(macro_def)));
+            } else {
+                tracing::warn!(macro_name = %name, "binding references unknown macro");
+            }
+        }
+        Action::MouseButton { button } => {
+            if let Some(mb) = MouseButton::from_str(button) {
+                actions.push(EngineAction::Emit(OutputEvent::MouseButtonDown(mb)));
+                actions.push(EngineAction::Emit(OutputEvent::MouseButtonUp(mb)));
+            } else {
+                tracing::warn!(button = %button, "unknown mouse button name in config");
             }
         }
     }
@@ -195,6 +262,7 @@ fn emit_stick_mouse(
     state: &ControllerState,
     deadzone: f32,
     dt: Duration,
+    accum: &mut MotionAccumulator,
     actions: &mut Vec<EngineAction>,
 ) {
     let Some(stick) = StickId::from_str(&sm.stick) else {
@@ -212,7 +280,12 @@ fn emit_stick_mouse(
     let dt_secs = dt.as_secs_f32();
     let dx = axis_to_velocity(x, sm.sensitivity, &sm.accel_curve) * dt_secs;
     let dy = axis_to_velocity(y, sm.sensitivity, &sm.accel_curve) * dt_secs;
-    actions.push(EngineAction::Emit(OutputEvent::MouseMove { dx, dy }));
+    // Accumulate sub-pixel motion across ticks so slow deflection still
+    // eventually moves the cursor instead of always rounding to zero.
+    let (dx, dy) = accum.step(dx, dy);
+    if dx != 0.0 || dy != 0.0 {
+        actions.push(EngineAction::Emit(OutputEvent::MouseMove { dx, dy }));
+    }
 }
 
 fn emit_scroll(
@@ -220,6 +293,7 @@ fn emit_scroll(
     state: &ControllerState,
     deadzone: f32,
     dt: Duration,
+    accum: &mut MotionAccumulator,
     actions: &mut Vec<EngineAction>,
 ) {
     let Some(stick) = StickId::from_str(&sc.stick) else {
@@ -236,10 +310,13 @@ fn emit_scroll(
     }
     let dt_secs = dt.as_secs_f32();
     let delta = value * sc.sensitivity * dt_secs;
-    if sc.axis == "x" {
-        actions.push(EngineAction::Emit(OutputEvent::Scroll { dx: delta, dy: 0.0 }));
+    let (dx, dy) = if sc.axis == "x" {
+        accum.step(delta, 0.0)
     } else {
-        actions.push(EngineAction::Emit(OutputEvent::Scroll { dx: 0.0, dy: delta }));
+        accum.step(0.0, delta)
+    };
+    if dx != 0.0 || dy != 0.0 {
+        actions.push(EngineAction::Emit(OutputEvent::Scroll { dx, dy }));
     }
 }
 
@@ -322,10 +399,50 @@ activate = { button = "l1", mode = "hold" }
 
         let l1_and_r2 = state_with_buttons(&[ButtonId::L1, ButtonId::R2]);
         let actions = engine.tick(&l1_and_r2, Duration::from_millis(4));
-        assert_eq!(actions.len(), 2); // mouse button down + up
+        assert_eq!(actions.len(), 1); // mouse button down only (held, not tapped)
 
+        // still held - no repeat
+        let actions = engine.tick(&l1_and_r2, Duration::from_millis(4));
+        assert_eq!(actions.len(), 0);
+
+        // r2 released (l1 still held) -> button up fires
+        let l1_only = state_with_buttons(&[ButtonId::L1]);
+        let actions = engine.tick(&l1_only, Duration::from_millis(4));
+        assert_eq!(actions.len(), 1);
+    }
+
+    #[test]
+    fn mouse_button_releases_even_if_layer_deactivates_first() {
+        let config = Config::from_str(
+            r#"
+schema_version = 1
+[[layers]]
+name = "mouse"
+activate = { button = "l1", mode = "hold" }
+
+  [[layers.bindings]]
+  input = "r2"
+  action = { type = "mouse_button", button = "left" }
+"#,
+        )
+        .unwrap();
+        let mut engine = BindingEngine::new(config);
+
+        let l1_and_r2 = state_with_buttons(&[ButtonId::L1, ButtonId::R2]);
+        engine.tick(&l1_and_r2, Duration::from_millis(4));
+
+        // user releases l1 first, dropping out of the mouse layer, while
+        // still physically holding r2 - the drag should keep going
+        // (button stays down) rather than releasing just because the
+        // layer that originally bound it deactivated.
         let r2_only = state_with_buttons(&[ButtonId::R2]);
         let actions = engine.tick(&r2_only, Duration::from_millis(4));
-        assert_eq!(actions.len(), 0); // layer deactivated, r2 binding no longer applies
+        assert_eq!(actions.len(), 0);
+
+        // now r2 itself releases -> the tracked mouse button releases,
+        // regardless of which layer (if any) is currently active.
+        let none = state_with_buttons(&[]);
+        let actions = engine.tick(&none, Duration::from_millis(4));
+        assert_eq!(actions.len(), 1);
     }
 }

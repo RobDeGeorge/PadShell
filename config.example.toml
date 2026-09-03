@@ -17,7 +17,7 @@ activate = { button = "l1", mode = "hold" }
   [layers.scroll]
   stick = "left"
   axis = "y"
-  sensitivity = 20.0
+  sensitivity = 60.0
 
   [[layers.bindings]]
   input = "r2"

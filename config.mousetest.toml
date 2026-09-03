@@ -1,0 +1,26 @@
+schema_version = 1
+
+[settings]
+stick_deadzone = 0.1
+
+[[layers]]
+name = "mouse"
+activate = { button = "l1", mode = "hold" }
+
+  [layers.stick_mouse]
+  stick = "right"
+  sensitivity = 900.0
+  accel_curve = "quadratic"
+
+  [layers.scroll]
+  stick = "left"
+  axis = "y"
+  sensitivity = 60.0
+
+  [[layers.bindings]]
+  input = "r2"
+  action = { type = "mouse_button", button = "left" }
+
+  [[layers.bindings]]
+  input = "l2"
+  action = { type = "mouse_button", button = "right" }
