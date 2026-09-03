@@ -5,7 +5,7 @@ use std::path::PathBuf;
 
 use clap::{Parser, Subcommand};
 use padshell_hid::device;
-use padshell_hid::ds4::Ds4UsbParser;
+use padshell_hid::ds4::{Ds4BtParser, Ds4UsbParser};
 use padshell_hid::ControllerReportParser;
 
 #[derive(Parser)]
@@ -33,6 +33,9 @@ enum Command {
     /// the resulting controller state - no hardware required.
     TestReport {
         path: PathBuf,
+        /// Parse as a Bluetooth (report ID 0x11) report instead of USB.
+        #[arg(long)]
+        bt: bool,
     },
 }
 
@@ -53,18 +56,23 @@ fn main() -> anyhow::Result<()> {
         Command::Devices => {
             for info in device::enumerate()? {
                 println!(
-                    "{}  vendor={:04x} product={:04x}",
+                    "{}  vendor={:04x} product={:04x} bus={:?}",
                     info.path.display(),
                     info.vendor_id,
-                    info.product_id
+                    info.product_id,
+                    info.bus
                 );
             }
             Ok(())
         }
-        Command::TestReport { path } => {
+        Command::TestReport { path, bt } => {
             let raw = std::fs::read(&path)?;
-            let parser = Ds4UsbParser::new();
-            match parser.parse(&raw) {
+            let state = if bt {
+                Ds4BtParser::new().parse(&raw)
+            } else {
+                Ds4UsbParser::new().parse(&raw)
+            };
+            match state {
                 Some(state) => {
                     println!("{state:#?}");
                     Ok(())

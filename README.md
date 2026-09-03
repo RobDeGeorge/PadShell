@@ -9,9 +9,10 @@ works under Wayland/Hyprland with no XTest dependency.
 
 ## Status
 
-v1: DS4-over-USB only. Bluetooth and other controllers (Xbox) are not implemented
-yet — see `crates/hid/src/ds4/bt.rs` and `ControllerReportParser` for the extension
-point.
+DS4 over USB and Bluetooth are both implemented and verified against real
+hardware (a CUH-ZCT2x DualShock 4). The daemon auto-detects whichever transport
+is currently connected. Other controllers (Xbox) are not implemented yet — see
+`ControllerReportParser` for the extension point.
 
 ## Requirements
 

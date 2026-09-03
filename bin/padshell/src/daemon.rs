@@ -3,8 +3,8 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use padshell_binding::{BindingEngine, Config, EngineAction};
-use padshell_hid::device::{self, HidrawDevice};
-use padshell_hid::ds4::{Ds4UsbParser, DS4_PRODUCT_ID_V1, DS4_PRODUCT_ID_V2, DS4_VENDOR_ID};
+use padshell_hid::device::{self, BusType, HidrawDevice};
+use padshell_hid::ds4::{Ds4BtParser, Ds4UsbParser, DS4_PRODUCT_ID_V1, DS4_PRODUCT_ID_V2, DS4_VENDOR_ID};
 use padshell_hid::ControllerReportParser;
 use padshell_output::OutputSink;
 
@@ -31,9 +31,12 @@ pub fn run(opts: RunOptions) -> anyhow::Result<()> {
     };
 
     let hidraw_info = find_ds4()?;
-    tracing::info!(path = ?hidraw_info.path, "opening DS4");
+    let parser: Box<dyn ControllerReportParser> = match hidraw_info.bus {
+        BusType::Bluetooth => Box::new(Ds4BtParser::new()),
+        _ => Box::new(Ds4UsbParser::new()),
+    };
+    tracing::info!(path = ?hidraw_info.path, bus = ?hidraw_info.bus, "opening DS4");
     let mut hidraw = HidrawDevice::open(&hidraw_info.path)?;
-    let parser = Ds4UsbParser::new();
 
     let mut buf = vec![0u8; parser.report_len()];
     let mut last_tick = Instant::now();
@@ -93,12 +96,13 @@ fn play_macro(sink: Arc<OutputSink>, items: Vec<padshell_binding::macro_::Playba
 }
 
 fn find_ds4() -> anyhow::Result<device::HidrawInfo> {
-    device::find(DS4_VENDOR_ID, DS4_PRODUCT_ID_V1)
-        .or_else(|_| device::find(DS4_VENDOR_ID, DS4_PRODUCT_ID_V2))
-        .map_err(|e| {
-            anyhow::anyhow!(
-                "no DS4 controller found ({e}). Is it connected via USB? \
-                 Run `padshell devices` to list available hidraw devices."
-            )
-        })
+    let mut candidates = device::find_all(DS4_VENDOR_ID, DS4_PRODUCT_ID_V1)?;
+    candidates.extend(device::find_all(DS4_VENDOR_ID, DS4_PRODUCT_ID_V2)?);
+
+    candidates.into_iter().next().ok_or_else(|| {
+        anyhow::anyhow!(
+            "no DS4 controller found. Is it connected via USB or paired/connected over \
+             Bluetooth? Run `padshell devices` to list available hidraw devices."
+        )
+    })
 }
