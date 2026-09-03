@@ -26,6 +26,10 @@ enum Command {
         /// useful for verifying HID parsing against real hardware.
         #[arg(long)]
         dump_only: bool,
+        /// With --dump-only, print only when the button set changes
+        /// instead of every report - readable while pressing buttons live.
+        #[arg(long, requires = "dump_only")]
+        changes_only: bool,
     },
     /// List hidraw devices and their USB vendor/product IDs.
     Devices,
@@ -46,11 +50,12 @@ fn main() -> anyhow::Result<()> {
 
     let cli = Cli::parse();
     match cli.command {
-        Command::Run { config, dump_only } => {
+        Command::Run { config, dump_only, changes_only } => {
             let config_path = expand_tilde(&config);
             daemon::run(daemon::RunOptions {
                 config_path,
                 dump_only,
+                changes_only,
             })
         }
         Command::Devices => {

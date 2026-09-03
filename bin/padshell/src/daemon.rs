@@ -16,6 +16,9 @@ pub struct RunOptions {
     /// are injected - useful for verifying HID decoding without an
     /// active virtual device.
     pub dump_only: bool,
+    /// With dump_only, print only when the button set changes instead of
+    /// every report - much easier to read while pressing buttons live.
+    pub changes_only: bool,
 }
 
 pub fn run(opts: RunOptions) -> anyhow::Result<()> {
@@ -40,6 +43,7 @@ pub fn run(opts: RunOptions) -> anyhow::Result<()> {
 
     let mut buf = vec![0u8; parser.report_len()];
     let mut last_tick = Instant::now();
+    let mut last_buttons = padshell_core::ButtonSet::empty();
 
     loop {
         if let Some(new_config) = watcher.poll_reload() {
@@ -58,7 +62,30 @@ pub fn run(opts: RunOptions) -> anyhow::Result<()> {
         last_tick = now;
 
         if opts.dump_only {
-            tracing::info!(?state, "controller state");
+            if opts.changes_only {
+                // Analog values (sticks/triggers) redraw in place every
+                // tick so they're always visible without flooding the
+                // scrollback; a button state change gets its own logged
+                // line so the press/release history stays readable.
+                use std::io::Write;
+                print!(
+                    "\r\x1b[K L({:+.2},{:+.2}) R({:+.2},{:+.2}) L2:{:.2} R2:{:.2}  {:?}",
+                    state.left_stick.x,
+                    state.left_stick.y,
+                    state.right_stick.x,
+                    state.right_stick.y,
+                    state.l2_analog,
+                    state.r2_analog,
+                    state.buttons,
+                );
+                std::io::stdout().flush().ok();
+                if state.buttons != last_buttons {
+                    println!();
+                    last_buttons = state.buttons;
+                }
+            } else {
+                tracing::info!(?state, "controller state");
+            }
             continue;
         }
 
