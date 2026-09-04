@@ -3,9 +3,30 @@
 //! can build and replay custom lighting/rumble presets.
 
 use cxx_qt_lib::QString;
+use padshell_binding::{HapticsMode, HapticsState};
 use padshell_hid::{AnimationHandle, HapticsController, LightbarAnimation};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
+
+/// Discovers the haptics controller for whichever DS4 is currently
+/// connected, scoped to that specific device (not "first DS4 anywhere")
+/// so this matches what `persist_haptics` writes to.
+fn discover() -> Option<HapticsController> {
+    let info = crate::device_profile::current_device()?;
+    Some(HapticsController::discover(&info.hid_syspath))
+}
+
+/// Saves the given lightbar/animation state into the currently-connected
+/// controller's own profile file, so it's what the daemon reapplies the
+/// next time this controller reconnects. The hardware write already
+/// happened by the time this is called, so a failure here doesn't undo
+/// the lightbar change on screen - it just means it won't survive a
+/// reconnect, which callers surface via last_error rather than swallow.
+fn persist_haptics(mode: HapticsMode, r: u8, g: u8, b: u8, period_ms: u32) -> Result<(), String> {
+    let (mut config, path, _info) = crate::device_profile::current_profile()?;
+    config.haptics = HapticsState { mode, r, g, b, period_ms };
+    config.save(&path).map_err(|e| e.to_string())
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Effect {
@@ -132,7 +153,7 @@ impl HapticsBridge {
     }
 
     pub fn refresh_capabilities(mut self: Pin<&mut Self>) {
-        match HapticsController::discover_ds4() {
+        match discover() {
             Some(h) => {
                 self.as_mut().set_has_lightbar(h.has_lightbar());
                 self.as_mut().set_has_rumble(h.has_rumble());
@@ -146,12 +167,18 @@ impl HapticsBridge {
     }
 
     pub fn set_lightbar(mut self: Pin<&mut Self>, r: i32, g: i32, b: i32) -> bool {
-        let Some(haptics) = HapticsController::discover_ds4() else {
+        let Some(haptics) = discover() else {
             self.as_mut().set_error("no DS4 controller found");
             return false;
         };
-        match haptics.set_lightbar(clamp_u8(r), clamp_u8(g), clamp_u8(b)) {
-            Ok(()) => true,
+        let (r, g, b) = (clamp_u8(r), clamp_u8(g), clamp_u8(b));
+        match haptics.set_lightbar(r, g, b) {
+            Ok(()) => {
+                if let Err(err) = persist_haptics(HapticsMode::Solid, r, g, b, 0) {
+                    self.as_mut().set_error(format!("lightbar set, but won't survive a reconnect: {err}"));
+                }
+                true
+            }
             Err(err) => {
                 self.as_mut().set_error(err);
                 false
@@ -160,7 +187,7 @@ impl HapticsBridge {
     }
 
     pub fn rumble(mut self: Pin<&mut Self>, weak: i32, strong: i32, duration_ms: i32) -> bool {
-        let Some(haptics) = HapticsController::discover_ds4() else {
+        let Some(haptics) = discover() else {
             self.as_mut().set_error("no DS4 controller found");
             return false;
         };
@@ -273,7 +300,7 @@ impl HapticsBridge {
         b: i32,
         period_ms: i32,
     ) -> bool {
-        let Some(haptics) = HapticsController::discover_ds4() else {
+        let Some(haptics) = discover() else {
             self.as_mut().set_error("no DS4 controller found");
             return false;
         };
@@ -283,20 +310,11 @@ impl HapticsBridge {
         }
 
         let period_ms = period_ms.clamp(50, 60_000) as u32;
-        let animation = match kind.to_string().as_str() {
-            "rainbow" => LightbarAnimation::Rainbow { period_ms },
-            "fade" => LightbarAnimation::Fade {
-                r: clamp_u8(r),
-                g: clamp_u8(g),
-                b: clamp_u8(b),
-                period_ms,
-            },
-            "strobe" => LightbarAnimation::Strobe {
-                r: clamp_u8(r),
-                g: clamp_u8(g),
-                b: clamp_u8(b),
-                period_ms,
-            },
+        let (r, g, b) = (clamp_u8(r), clamp_u8(g), clamp_u8(b));
+        let (mode, animation) = match kind.to_string().as_str() {
+            "rainbow" => (HapticsMode::Rainbow, LightbarAnimation::Rainbow { period_ms }),
+            "fade" => (HapticsMode::Fade, LightbarAnimation::Fade { r, g, b, period_ms }),
+            "strobe" => (HapticsMode::Strobe, LightbarAnimation::Strobe { r, g, b, period_ms }),
             other => {
                 self.as_mut().set_error(format!("unknown animation kind: {other}"));
                 return false;
@@ -311,6 +329,9 @@ impl HapticsBridge {
         let mut rust = self.as_mut().rust_mut();
         rust.animation = Some(handle);
         self.as_mut().set_is_animating(true);
+        if let Err(err) = persist_haptics(mode, r, g, b, period_ms) {
+            self.as_mut().set_error(format!("animation started, but won't survive a reconnect: {err}"));
+        }
         true
     }
 
@@ -320,6 +341,9 @@ impl HapticsBridge {
         }
         self.as_mut().rust_mut().animation = None;
         self.as_mut().set_is_animating(false);
+        if let Err(err) = persist_haptics(HapticsMode::Off, 0, 0, 0, 0) {
+            self.as_mut().set_error(err);
+        }
     }
 }
 

@@ -24,6 +24,7 @@ fn empty_config() -> Config {
         layers: Vec::new(),
         bindings: Vec::new(),
         macros: Vec::new(),
+        haptics: Default::default(),
     }
 }
 
@@ -154,11 +155,16 @@ impl ConfigBridge {
         self.as_mut().set_last_error(QString::from(&msg.to_string()));
     }
 
+    /// Loads the currently-connected controller's own profile (creating
+    /// it, seeded from default.toml, the first time this controller is
+    /// seen) rather than a single global file - each controller keeps
+    /// its own bindings, matching what the daemon reads on connect.
     pub fn load(mut self: Pin<&mut Self>) -> bool {
-        let path = self.config_path.clone();
-        match Config::load(&path) {
-            Ok(config) => {
-                self.as_mut().rust_mut().config = config;
+        match crate::device_profile::current_profile() {
+            Ok((config, path, _info)) => {
+                let mut rust = self.as_mut().rust_mut();
+                rust.config = config;
+                rust.config_path = path;
                 self.as_mut().sync_to_qml();
                 true
             }

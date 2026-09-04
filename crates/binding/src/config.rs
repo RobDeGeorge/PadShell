@@ -13,6 +13,8 @@ pub enum ConfigError {
     Io(#[from] std::io::Error),
     #[error("failed to parse config: {0}")]
     Parse(#[from] toml::de::Error),
+    #[error("failed to serialize config: {0}")]
+    Serialize(#[from] toml::ser::Error),
     #[error("unknown button/stick name: {0}")]
     UnknownName(String),
 }
@@ -30,6 +32,34 @@ pub struct Config {
     pub bindings: Vec<Binding>,
     #[serde(default)]
     pub macros: Vec<Macro>,
+    #[serde(default)]
+    pub haptics: HapticsState,
+}
+
+/// The lightbar state to reapply the moment this controller (re)connects,
+/// so it survives unplug/replug and daemon restarts. Mirrors
+/// `padshell_hid::haptics::LightbarAnimation`, kept as plain data here so
+/// this crate doesn't need to depend on `padshell-hid` for one small
+/// struct - the daemon, which already depends on both, converts it.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct HapticsState {
+    pub mode: HapticsMode,
+    pub r: u8,
+    pub g: u8,
+    pub b: u8,
+    pub period_ms: u32,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum HapticsMode {
+    #[default]
+    Off,
+    Solid,
+    Rainbow,
+    Fade,
+    Strobe,
 }
 
 impl Config {
@@ -44,6 +74,48 @@ impl Config {
         let config: Config = toml::from_str(text)?;
         config.validate()?;
         Ok(config)
+    }
+
+    /// Loads a per-controller profile from `<config_dir>/devices/<device_id>.toml`,
+    /// creating it on first sight of a device by seeding it from
+    /// `<config_dir>/default.toml` (or a bare default if that's missing
+    /// too) and writing it out - so a newly-seen controller gets an
+    /// immediately editable, on-disk profile rather than a silent
+    /// in-memory default. Returns the loaded config and the path it now
+    /// lives at.
+    pub fn load_or_init_profile(config_dir: &Path, device_id: &str) -> Result<(Config, std::path::PathBuf), ConfigError> {
+        let devices_dir = config_dir.join("devices");
+        let profile_path = devices_dir.join(format!("{device_id}.toml"));
+
+        if profile_path.exists() {
+            return Ok((Config::load(&profile_path)?, profile_path));
+        }
+
+        let default_path = config_dir.join("default.toml");
+        let config = if default_path.exists() {
+            Config::load(&default_path)?
+        } else {
+            Config {
+                schema_version: 1,
+                device: DeviceConfig::default(),
+                settings: Settings::default(),
+                layers: Vec::new(),
+                bindings: Vec::new(),
+                macros: Vec::new(),
+                haptics: HapticsState::default(),
+            }
+        };
+
+        std::fs::create_dir_all(&devices_dir)?;
+        std::fs::write(&profile_path, toml::to_string_pretty(&config)?)?;
+        Ok((config, profile_path))
+    }
+
+    /// Persists this config back to `path` (used to remember lightbar
+    /// state changes so they survive reconnects/restarts).
+    pub fn save(&self, path: &Path) -> Result<(), ConfigError> {
+        std::fs::write(path, toml::to_string_pretty(self)?)?;
+        Ok(())
     }
 
     /// Checks that every button/stick name referenced actually resolves,
@@ -245,6 +317,29 @@ action = { type = "key", key = "space" }
 "#;
         let config = Config::from_str(toml).unwrap();
         assert_eq!(config.bindings.len(), 1);
+    }
+
+    #[test]
+    fn load_or_init_profile_seeds_from_default_and_persists() {
+        let dir = std::env::temp_dir().join(format!("padshell-test-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("default.toml"),
+            "schema_version = 1\n\n[[bindings]]\ninput = \"cross\"\naction = { type = \"key\", key = \"space\" }\n",
+        )
+        .unwrap();
+
+        let (config, path) = Config::load_or_init_profile(&dir, "054c05c4-default").unwrap();
+        assert_eq!(config.bindings.len(), 1);
+        assert!(path.ends_with("devices/054c05c4-default.toml"));
+        assert!(path.exists());
+
+        // A second load for the same device_id reads the now-persisted
+        // profile rather than re-seeding from default.toml.
+        let (config2, _) = Config::load_or_init_profile(&dir, "054c05c4-default").unwrap();
+        assert_eq!(config2.bindings.len(), 1);
+
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]

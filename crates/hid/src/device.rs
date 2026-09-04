@@ -46,6 +46,39 @@ pub struct HidrawInfo {
     /// device's lightbar LEDs and force-feedback evdev node, which live
     /// under this same HID device rather than the hidraw node itself.
     pub hid_syspath: PathBuf,
+    /// The HID `uniq` attribute - a real per-device serial when the
+    /// hardware/transport provides one. For Bluetooth this is the
+    /// controller's MAC address (stable across reconnects). USB DS4s
+    /// don't expose one, so this is `None` there.
+    pub uniq: Option<String>,
+    /// Sysname of the physical USB device ancestor (e.g. `"5-2.2"`),
+    /// stable for as long as the controller stays in the same USB port.
+    /// Used as a per-device-identity fallback when `uniq` is unavailable
+    /// (i.e. USB, where there's no hardware serial to key off of).
+    pub port_path: Option<String>,
+}
+
+impl HidrawInfo {
+    /// A stable identity for this controller, used to key its saved
+    /// profile/settings across disconnects and reconnects. Prefers the
+    /// hardware `uniq` (a real per-controller serial, e.g. a Bluetooth
+    /// MAC address); falls back to the physical USB port path when no
+    /// serial is available, so two identical controllers plugged into
+    /// different ports still get distinct, stable profiles; falls back
+    /// to a bare vendor/product id (shared by any matching device) only
+    /// when neither is available.
+    pub fn device_id(&self) -> String {
+        let suffix = self
+            .uniq
+            .as_deref()
+            .map(|u| format!("uniq-{u}"))
+            .or_else(|| self.port_path.as_deref().map(|p| format!("port-{p}")))
+            .unwrap_or_else(|| "default".to_string());
+        let id = format!("{:04x}{:04x}-{suffix}", self.vendor_id, self.product_id);
+        id.chars()
+            .map(|c| if c.is_ascii_alphanumeric() || c == '-' { c } else { '_' })
+            .collect()
+    }
 }
 
 /// List every /dev/hidraw* device along with its HID vendor/product ID
@@ -74,12 +107,26 @@ pub fn enumerate() -> Result<Vec<HidrawInfo>, HidError> {
             continue;
         };
 
+        let uniq = hid_parent
+            .attribute_value("uniq")
+            .and_then(|v| v.to_str())
+            .map(str::trim)
+            .filter(|v| !v.is_empty())
+            .map(str::to_string);
+        let port_path = device
+            .parent_with_subsystem("usb")
+            .ok()
+            .flatten()
+            .and_then(|usb| usb.sysname().to_str().map(str::to_string));
+
         out.push(HidrawInfo {
             path: devnode.to_path_buf(),
             vendor_id: ids.0,
             product_id: ids.1,
             bus: BusType::from_code(ids.2),
             hid_syspath: hid_parent.syspath().to_path_buf(),
+            uniq,
+            port_path,
         });
     }
 
@@ -143,6 +190,36 @@ mod tests {
         assert_eq!(vendor, 0x054c);
         assert_eq!(product, 0x09cc);
         assert_eq!(BusType::from_code(bus), BusType::Bluetooth);
+    }
+
+    fn info(uniq: Option<&str>, port_path: Option<&str>) -> HidrawInfo {
+        HidrawInfo {
+            path: PathBuf::from("/dev/hidraw0"),
+            vendor_id: 0x054c,
+            product_id: 0x05c4,
+            bus: BusType::Usb,
+            hid_syspath: PathBuf::from("/sys/bus/hid/devices/0003:054C:05C4.0002"),
+            uniq: uniq.map(str::to_string),
+            port_path: port_path.map(str::to_string),
+        }
+    }
+
+    #[test]
+    fn device_id_prefers_uniq_over_port_path() {
+        let id = info(Some("AA:BB:CC:DD:EE:FF"), Some("5-2.2")).device_id();
+        assert_eq!(id, "054c05c4-uniq-AA_BB_CC_DD_EE_FF");
+    }
+
+    #[test]
+    fn device_id_falls_back_to_port_path() {
+        let id = info(None, Some("5-2.2")).device_id();
+        assert_eq!(id, "054c05c4-port-5-2_2");
+    }
+
+    #[test]
+    fn device_id_falls_back_to_default_when_no_identity() {
+        let id = info(None, None).device_id();
+        assert_eq!(id, "054c05c4-default");
     }
 
     #[test]

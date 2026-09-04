@@ -20,8 +20,11 @@ enum Command {
     /// Run the daemon: read the controller, apply bindings, drive the
     /// virtual keyboard/mouse.
     Run {
-        #[arg(long, default_value = "~/.config/padshell/config.toml")]
-        config: String,
+        /// Root config directory. Each connected controller gets its own
+        /// profile under `<config_dir>/devices/`, seeded from
+        /// `<config_dir>/default.toml` the first time it's seen.
+        #[arg(long, default_value = "~/.config/padshell")]
+        config_dir: String,
         /// Log decoded controller state instead of injecting output -
         /// useful for verifying HID parsing against real hardware.
         #[arg(long)]
@@ -69,10 +72,10 @@ fn main() -> anyhow::Result<()> {
 
     let cli = Cli::parse();
     match cli.command {
-        Command::Run { config, dump_only, changes_only } => {
-            let config_path = expand_tilde(&config);
+        Command::Run { config_dir, dump_only, changes_only } => {
+            let config_dir = expand_tilde(&config_dir);
             daemon::run(daemon::RunOptions {
-                config_path,
+                config_dir,
                 dump_only,
                 changes_only,
             })

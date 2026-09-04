@@ -11,9 +11,17 @@ under Wayland/Hyprland with no XTest dependency.
 ## Status
 
 DS4 over USB and Bluetooth are both implemented and verified against real
-hardware (a CUH-ZCT2x DualShock 4). The daemon auto-detects whichever transport
-is currently connected. Other controllers (Xbox) are not implemented yet — see
-`ControllerReportParser` for the extension point.
+hardware (a CUH-ZCT2x DualShock 4). Other controllers (Xbox) are not
+implemented yet — see `ControllerReportParser` for the extension point.
+
+The daemon supports any number of controllers connected at once, each with
+its own bindings and lightbar state: it identifies a controller by its
+Bluetooth MAC (or, over USB where no such serial exists, the physical port
+it's plugged into), loads a profile for that identity from
+`~/.config/padshell/devices/`, and keeps watching for controllers appearing
+or disappearing rather than exiting when one is unplugged. Reconnecting
+(replugging, or a Bluetooth controller waking back up) reapplies that
+controller's saved lightbar/animation state automatically.
 
 A QML GUI (`padshell-ui`) is included: a Live Monitor tab (DS4-shaped diagram
 showing live button/stick/trigger state), a Bindings tab (click a button on the
@@ -49,8 +57,10 @@ padshell devices
 padshell test-report path/to/report.bin
 
 # Run the daemon
-cp config.example.toml ~/.config/padshell/config.toml
+cp config.example.toml ~/.config/padshell/default.toml
 padshell run
+# Each controller connected gets its own profile, seeded from default.toml,
+# at ~/.config/padshell/devices/<device-id>.toml the first time it's seen.
 
 # Log decoded controller state instead of injecting output - useful for
 # verifying the HID parser against real hardware before trusting it.
@@ -67,7 +77,9 @@ cargo run --release -p padshell-ui
 
 Config hot-reloads on save; no need to restart the daemon after editing bindings
 (whether you edit the TOML by hand or through the GUI's Bindings tab, which
-writes to the same file).
+writes to the same file). A controller upgrading from a pre-multi-profile
+setup has its old `~/.config/padshell/config.toml` copied to `default.toml`
+automatically on first run.
 
 ## Config
 

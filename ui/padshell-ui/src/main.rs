@@ -1,4 +1,5 @@
 mod config_bridge;
+mod device_profile;
 mod haptics_bridge;
 mod live_bridge;
 
