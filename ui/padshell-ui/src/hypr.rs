@@ -282,6 +282,8 @@ fn pretty_key(key: &str) -> String {
         "return" => "Return".into(),
         "space" => "Space".into(),
         "escape" => "Escape".into(),
+        "page_up" | "prior" => "PgUp".into(),
+        "page_down" | "next" => "PgDn".into(),
         "semicolon" => ";".into(),
         "equal" => "=".into(),
         "minus" => "-".into(),
@@ -338,8 +340,8 @@ fn translate_keys(mods: &[String], key: &str, flags: &str) -> (Option<Vec<String
     let padshell_key = match lower.as_str() {
         "return" | "kp_enter" => "enter".to_string(),
         "escape" => "escape".to_string(),
-        "prior" => "pageup".to_string(),
-        "next" => "pagedown".to_string(),
+        "prior" | "page_up" | "kp_prior" => "pageup".to_string(),
+        "next" | "page_down" | "kp_next" => "pagedown".to_string(),
         "bracketleft" => "leftbrace".to_string(),
         "bracketright" => "rightbrace".to_string(),
         other => other.to_string(),
@@ -387,7 +389,13 @@ fn describe(dispatcher: &str, args: &str, submap: &str) -> String {
         "movewindow" => format!("Move window {}", dir(args)),
         "swapwindow" => format!("Swap window {}", dir(args)),
         "resizeactive" => format!("Resize window {}", resize_dir(args)),
-        "workspace" => format!("Go to workspace {}", args.trim()),
+        "workspace" => match args.trim() {
+            "e+1" | "r+1" | "+1" => "Next workspace".into(),
+            "e-1" | "r-1" | "-1" => "Previous workspace".into(),
+            "previous" => "Last workspace".into(),
+            "empty" => "New empty workspace".into(),
+            n => format!("Go to workspace {n}"),
+        },
         "movetoworkspacesilent" | "movetoworkspace" if args.trim().starts_with("special:") => {
             format!("Send window to scratchpad {}", &args.trim()[8..])
         }
