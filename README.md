@@ -29,9 +29,11 @@ color, rumble, and animated effects — rainbow/fade/strobe — with a small
 persisted library of named presets).
 
 The Bindings tab works like a game's controls screen: the left column lists
-every `bind` from your Hyprland config (`~/.config/hypr/hyprland.conf`,
-following `source =` includes and `$variables`, grouped by the section
-comments in that file and given friendly names like "Close window" or
+every `bind` from your Hyprland config (`~/.config/hypr/hyprland.lua` if it
+exists, since Hyprland prefers it, otherwise `hyprland.conf`; the TOML-style
+file is parsed directly following `source =` includes and `$variables`, the
+Lua file is evaluated with the system `lua` under a stub `hl` API that records
+`hl.bind()` calls), grouped by the section comments in that file and given friendly names like "Close window" or
 "Go to workspace 3"), every desktop app the wofi launcher shows (bound as a
 `launch` action that runs the app's Exec line), plus raw keyboard keys and
 mouse buttons. Pick an

@@ -32,13 +32,26 @@ pub struct HyprAction {
     pub flags: String,
 }
 
+/// Hyprland (0.55+) prefers `hyprland.lua` over `hyprland.conf` when
+/// both exist, so we do the same.
 pub fn default_config_path() -> PathBuf {
-    if let Ok(xdg) = std::env::var("XDG_CONFIG_HOME") {
-        return PathBuf::from(xdg).join("hypr/hyprland.conf");
+    let hypr_dir = match std::env::var("XDG_CONFIG_HOME") {
+        Ok(xdg) => PathBuf::from(xdg).join("hypr"),
+        Err(_) => {
+            let home = std::env::var("HOME").unwrap_or_else(|_| "/".to_string());
+            PathBuf::from(home).join(".config/hypr")
+        }
+    };
+    let lua = hypr_dir.join("hyprland.lua");
+    if lua.exists() {
+        lua
+    } else {
+        hypr_dir.join("hyprland.conf")
     }
-    let home = std::env::var("HOME").unwrap_or_else(|_| "/".to_string());
-    PathBuf::from(home).join(".config/hypr/hyprland.conf")
 }
+
+/// The stub `hl` API used to evaluate Lua configs (see that file).
+const LUA_STUB: &str = include_str!("hypr_stub.lua");
 
 pub struct HyprConfig {
     pub actions: Vec<HyprAction>,
@@ -48,10 +61,105 @@ pub struct HyprConfig {
 }
 
 pub fn load(path: &Path) -> std::io::Result<HyprConfig> {
+    if path.extension().and_then(|e| e.to_str()) == Some("lua") {
+        return load_lua(path);
+    }
     let mut parser = Parser::default();
     parser.parse_file(path, 0)?;
     let terminal = parser.vars.get("terminal").cloned();
     Ok(HyprConfig { actions: parser.actions, terminal })
+}
+
+/// Lua configs can't be parsed line by line (binds are generated in
+/// loops and functions), so run the file through a real Lua interpreter
+/// with a stub `hl` that records each hl.bind() call and the line it
+/// came from. Section headers and comment hints are still taken from
+/// the source text by line number.
+fn load_lua(path: &Path) -> std::io::Result<HyprConfig> {
+    use std::io::Write;
+    use std::process::{Command, Stdio};
+
+    let text = std::fs::read_to_string(path)?;
+    let interpreter = ["lua5.4", "lua", "luajit", "lua5.3"]
+        .iter()
+        .find_map(|name| which(name))
+        .ok_or_else(|| {
+            std::io::Error::new(
+                std::io::ErrorKind::NotFound,
+                "no Lua interpreter (lua5.4 / lua / luajit) found to read hyprland.lua",
+            )
+        })?;
+    let mut child = Command::new(interpreter)
+        .arg("-")
+        .arg(path)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()?;
+    child.stdin.take().unwrap().write_all(LUA_STUB.as_bytes())?;
+    let output = child.wait_with_output()?;
+    if !output.status.success() && output.stdout.is_empty() {
+        return Err(std::io::Error::other(String::from_utf8_lossy(&output.stderr).trim().to_string()));
+    }
+
+    // Pre-scan comments so each bind can pick up its section / hint.
+    let mut parser = Parser::default();
+    let mut notes: Vec<(String, Option<String>)> = Vec::with_capacity(text.lines().count() + 1);
+    notes.push((String::new(), None)); // lines are 1-based
+    for raw in text.lines() {
+        let line = raw.trim();
+        if line.is_empty() {
+            parser.reset_comment_state();
+        } else if let Some(comment) = line.strip_prefix("--") {
+            parser.note_comment(comment);
+        } else {
+            parser.prev_line_was_rule = false;
+            parser.pending_header = None;
+            // Trailing "-- comment" on a code line is a hint for it.
+            if let Some((_, c)) = line.split_once(" --") {
+                parser.hint = Some(c.trim().to_string());
+            }
+        }
+        notes.push((parser.section.clone(), parser.hint.clone()));
+        if !line.is_empty() && !line.starts_with("--") {
+            parser.hint = None;
+        }
+    }
+
+    parser.section.clear();
+    parser.hint = None;
+    for record in String::from_utf8_lossy(&output.stdout).lines() {
+        let f: Vec<&str> = record.split('\t').collect();
+        if f.len() < 6 {
+            continue;
+        }
+        let line: usize = f[0].parse().unwrap_or(0);
+        let (section, hint) = notes.get(line).cloned().unwrap_or_default();
+        parser.section = section;
+        parser.hint = hint;
+        parser.submap = f[1].to_string();
+        let mut keys: Vec<&str> = f[2].split('+').map(str::trim).filter(|k| !k.is_empty()).collect();
+        let Some(key) = keys.pop() else { continue };
+        let mods = keys.join(" ");
+        parser.push_parts(f[5], &mods, key, f[3].to_string(), f[4].to_string());
+    }
+
+    let terminal = text
+        .lines()
+        .find_map(|l| {
+            let l = l.trim();
+            let rest = l.strip_prefix("local terminal")?.trim_start().strip_prefix('=')?.trim();
+            let rest = rest.strip_prefix('"')?;
+            rest.split('"').next().map(str::to_string)
+        });
+    Ok(HyprConfig { actions: parser.actions, terminal })
+}
+
+fn which(name: &str) -> Option<PathBuf> {
+    let path = std::env::var_os("PATH")?;
+    std::env::split_paths(&path)
+        .map(|d| d.join(name))
+        .find(|p| p.is_file())
 }
 
 #[derive(Default)]
@@ -81,37 +189,44 @@ impl Parser {
         Ok(())
     }
 
+    fn reset_comment_state(&mut self) {
+        self.hint = None;
+        self.prev_line_was_rule = false;
+        self.pending_header = None;
+    }
+
+    /// Section headers: a comment sandwiched between decorative
+    /// "# =====" rules, e.g. "# Applications (Your i3 keybinds)".
+    /// Any other comment is a hint for the bind right below it.
+    fn note_comment(&mut self, comment: &str) {
+        let comment = comment.trim();
+        let is_rule = !comment.is_empty()
+            && comment.chars().all(|c| matches!(c, '=' | '-' | '#' | '*' | '~'));
+        if is_rule {
+            if let Some(header) = self.pending_header.take() {
+                self.section = header;
+                self.hint = None;
+            }
+            self.prev_line_was_rule = true;
+        } else {
+            if self.prev_line_was_rule && !comment.is_empty() {
+                self.pending_header = Some(comment.to_string());
+            }
+            if !comment.is_empty() {
+                self.hint = Some(comment.to_string());
+            }
+            self.prev_line_was_rule = false;
+        }
+    }
+
     fn parse_line(&mut self, raw: &str, path: &Path, depth: usize) {
         let line = raw.trim();
         if line.is_empty() {
-            self.hint = None;
-            self.prev_line_was_rule = false;
-            self.pending_header = None;
+            self.reset_comment_state();
             return;
         }
-
-        // Section headers: a comment sandwiched between decorative
-        // "# =====" rules, e.g. "# Applications (Your i3 keybinds)".
-        // Any other comment is a hint for the bind right below it.
         if let Some(comment) = line.strip_prefix('#') {
-            let comment = comment.trim();
-            let is_rule = !comment.is_empty()
-                && comment.chars().all(|c| matches!(c, '=' | '-' | '#' | '*' | '~'));
-            if is_rule {
-                if let Some(header) = self.pending_header.take() {
-                    self.section = header;
-                    self.hint = None;
-                }
-                self.prev_line_was_rule = true;
-            } else {
-                if self.prev_line_was_rule && !comment.is_empty() {
-                    self.pending_header = Some(comment.to_string());
-                }
-                if !comment.is_empty() {
-                    self.hint = Some(comment.to_string());
-                }
-                self.prev_line_was_rule = false;
-            }
+            self.note_comment(comment);
             return;
         }
         self.prev_line_was_rule = false;
@@ -180,7 +295,10 @@ impl Parser {
         let key_raw = parts[1];
         let dispatcher = parts[2].to_string();
         let args = parts.get(3).map(|s| s.to_string()).unwrap_or_default();
+        self.push_parts(flags, mods_raw, key_raw, dispatcher, args);
+    }
 
+    fn push_parts(&mut self, flags: &str, mods_raw: &str, key_raw: &str, dispatcher: String, args: String) {
         let mods: Vec<String> = mods_raw
             .split(|c: char| c.is_whitespace() || c == '+' || c == '_')
             .filter(|m| !m.is_empty())
@@ -196,7 +314,7 @@ impl Parser {
         let (keys, reason) = translate_keys(&mods, key_raw, flags);
         let hint = self.hint.take();
         let mut label = describe(&dispatcher, &args, &self.submap);
-        if matches!(dispatcher.as_str(), "exec" | "execr") {
+        if matches!(dispatcher.as_str(), "exec" | "execr" | "__lua") {
             if let Some(media) = media_label(key_raw) {
                 label = media.to_string();
             } else if let Some(h) = hint.filter(|h| !h.is_empty() && h.len() <= 60) {
@@ -426,6 +544,7 @@ fn describe(dispatcher: &str, args: &str, submap: &str) -> String {
             }
         }
         "exit" => "Exit Hyprland".into(),
+        "__lua" => "Custom Lua action".into(),
         other => {
             if args.trim().is_empty() {
                 other.to_string()
@@ -544,6 +663,48 @@ mod tests {
         assert!(acts[2].keys.is_none());
         assert_eq!(acts[4].category, "Mode: resize");
         assert_eq!(acts[4].label, "Resize window narrower");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+}
+
+#[cfg(test)]
+mod lua_tests {
+    #[test]
+    fn evaluates_lua_config_through_stub() {
+        if super::which("lua5.4").is_none() && super::which("lua").is_none() && super::which("luajit").is_none() {
+            eprintln!("no lua interpreter; skipping");
+            return;
+        }
+        let dir = std::env::temp_dir().join(format!("padshell-hypr-lua-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("hyprland.lua");
+        std::fs::write(
+            &path,
+            r#"local terminal = "kitty"
+local mainMod = "SUPER"
+-- ====
+-- Apps
+-- ====
+hl.bind(mainMod .. " + Return", hl.dsp.exec_cmd(terminal))
+for i = 1, 2 do hl.bind(mainMod .. " + " .. i, hl.dsp.focus({ workspace = i })) end
+hl.bind(mainMod .. " + Page_Down", hl.dsp.focus({ workspace = "e+1" }))
+hl.define_submap("resize", function()
+  hl.bind("J", hl.dsp.window.resize({ x = -10, y = 0 }), { repeating = true })
+end)
+hl.bind(mainMod .. " + mouse:272", hl.dsp.window.drag(), { mouse = true })
+require("colors")
+"#,
+        )
+        .unwrap();
+        let cfg = super::load(&path).unwrap();
+        assert_eq!(cfg.terminal.as_deref(), Some("kitty"));
+        let labels: Vec<(&str, &str)> = cfg.actions.iter().map(|a| (a.category.as_str(), a.label.as_str())).collect();
+        assert_eq!(labels[0], ("Apps", "Run kitty"));
+        assert!(labels.contains(&("Apps", "Go to workspace 2")));
+        assert!(labels.contains(&("Apps", "Next workspace")));
+        assert!(labels.contains(&("Mode: resize", "Resize window narrower")));
+        let drag = cfg.actions.iter().find(|a| a.shortcut.contains("mouse:272")).unwrap();
+        assert!(drag.keys.is_none() && drag.flags.contains('m'));
         std::fs::remove_dir_all(&dir).ok();
     }
 }
