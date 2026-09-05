@@ -39,6 +39,8 @@ pub struct ConfigBridgeRust {
     hypr_actions_json: QString,
     hypr_config_path: QString,
     hypr_error: QString,
+    /// JSON array of desktop apps (see apps.rs), the wofi drun list.
+    apps_json: QString,
     /// Highest `below_percent` among battery alerts (so the UI gauge
     /// turns red at the same point the lightbar does); 20 if none.
     lowest_alert_percent: i32,
@@ -58,6 +60,7 @@ impl Default for ConfigBridgeRust {
                 &crate::hypr::default_config_path().to_string_lossy().to_string(),
             ),
             hypr_error: QString::default(),
+            apps_json: QString::from("[]"),
             lowest_alert_percent: 20,
         }
     }
@@ -82,6 +85,7 @@ mod ffi {
         #[qproperty(QString, hypr_actions_json)]
         #[qproperty(QString, hypr_config_path)]
         #[qproperty(QString, hypr_error)]
+        #[qproperty(QString, apps_json)]
         #[qproperty(i32, lowest_alert_percent)]
         type ConfigBridge = super::ConfigBridgeRust;
 
@@ -411,10 +415,14 @@ impl ConfigBridge {
         self.as_mut()
             .set_hypr_config_path(QString::from(&path.to_string_lossy().to_string()));
         match crate::hypr::load(&path) {
-            Ok(actions) => {
-                let json = serde_json::to_string(&actions).unwrap_or_else(|_| "[]".into());
+            Ok(hypr) => {
+                let json = serde_json::to_string(&hypr.actions).unwrap_or_else(|_| "[]".into());
                 self.as_mut().set_hypr_actions_json(QString::from(&json));
                 self.as_mut().set_hypr_error(QString::default());
+                let terminal = hypr.terminal.unwrap_or_else(|| "kitty".to_string());
+                let apps = crate::apps::scan(&terminal);
+                let apps_json = serde_json::to_string(&apps).unwrap_or_else(|_| "[]".into());
+                self.as_mut().set_apps_json(QString::from(&apps_json));
                 true
             }
             Err(err) => {

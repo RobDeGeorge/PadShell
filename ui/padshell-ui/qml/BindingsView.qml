@@ -69,6 +69,13 @@ Item {
                 shortcut: a.shortcut, keys: a.keys, reason: a.reason, submap: a.submap
             });
         }
+        let apps = [];
+        try { apps = JSON.parse(config ? config.apps_json : "[]"); } catch (e) { apps = []; }
+        for (const app of apps) {
+            out.push({kind: "launch", id: "launch:" + app.command, label: "Launch " + app.name,
+                      category: "Apps (wofi launcher)", shortcut: app.id.replace(/\.desktop$/, ""),
+                      keys: null, reason: "", command: app.command, comment: app.comment});
+        }
         for (const m of ["left", "right", "middle"]) {
             out.push({kind: "mouse", id: "mouse:" + m, label: "Mouse " + m + " click",
                       category: "Mouse", shortcut: "", keys: null, reason: "", mouse: m});
@@ -115,6 +122,7 @@ Item {
     // ------------------------------------------------------------------
     function actionToJson(a) {
         if (a.kind === "mouse") return JSON.stringify({type: "mouse_button", button: a.mouse});
+        if (a.kind === "launch") return JSON.stringify({type: "launch", command: a.command});
         if (!a.keys) return "";
         if (a.keys.length === 1) return JSON.stringify({type: "key", key: a.keys[0]});
         return JSON.stringify({type: "key_combo", keys: a.keys});
@@ -126,6 +134,7 @@ Item {
         if (!b) return "";
         const act = b.action;
         if (act.type === "mouse_button") return "mouse:" + act.button;
+        if (act.type === "launch") return "launch:" + act.command;
         const sig = act.type === "key" ? act.key : act.type === "key_combo" ? root.keysSig(act.keys) : "";
         if (sig.length > 0) {
             // Only global binds count here: a bare Enter is "Key enter",
@@ -150,6 +159,11 @@ Item {
         }
         if (act.type === "macro") return "Macro " + act.name;
         if (act.type === "mouse_button") return "Mouse " + act.button + " click";
+        if (act.type === "launch") {
+            for (const a of root.allActions)
+                if (a.kind === "launch" && a.command === act.command) return a.label;
+            return "Run " + act.command;
+        }
         return JSON.stringify(act);
     }
 
@@ -188,7 +202,7 @@ Item {
     property var pressedAtArm: []
 
     function pickAction(a) {
-        if (!a.keys && a.kind !== "mouse") {
+        if (!a.keys && a.kind !== "mouse" && a.kind !== "launch") {
             root.flash = "Can't bind \"" + a.label + "\": " + a.reason;
             return;
         }
@@ -442,7 +456,7 @@ Item {
                             Rectangle {
                                 visible: !row.modelData.isHeader
                                 anchors.fill: parent
-                                property bool bindable: row.modelData.isHeader ? false : (row.modelData.keys !== null || row.modelData.kind === "mouse")
+                                property bool bindable: row.modelData.isHeader ? false : (row.modelData.keys !== null || row.modelData.kind === "mouse" || row.modelData.kind === "launch")
                                 property bool isPending: root.pendingAction !== null && !row.modelData.isHeader && root.pendingAction.id === row.modelData.id
                                 property var bound: row.modelData.isHeader ? [] : root.buttonsForAction(row.modelData.id)
                                 color: isPending ? "#3d3416" : rowHover.containsMouse ? "#2b2b2b" : "transparent"
@@ -488,8 +502,10 @@ Item {
                                     cursorShape: parent.bindable ? Qt.PointingHandCursor : Qt.ArrowCursor
                                     onClicked: root.pickAction(row.modelData)
                                 }
-                                ToolTip.visible: rowHover.containsMouse && !parent.bindable && !row.modelData.isHeader
-                                ToolTip.text: row.modelData.isHeader ? "" : row.modelData.reason
+                                ToolTip.visible: rowHover.containsMouse && !row.modelData.isHeader && (!parent.bindable || row.modelData.kind === "launch")
+                                ToolTip.text: row.modelData.isHeader ? "" : (row.modelData.kind === "launch"
+                                    ? (row.modelData.comment ? row.modelData.comment + "\n" : "") + row.modelData.command
+                                    : row.modelData.reason)
                                 ToolTip.delay: 400
                             }
                         }
@@ -656,6 +672,7 @@ Item {
                         return JSON.stringify({type: "key_combo", keys: value.split(",").map(s => s.trim()).filter(s => s.length > 0)});
                     if (type === "macro") return JSON.stringify({type: "macro", name: value});
                     if (type === "mouse_button") return JSON.stringify({type: "mouse_button", button: value});
+                    if (type === "launch") return JSON.stringify({type: "launch", command: value});
                     return "{}";
                 }
 
@@ -678,8 +695,8 @@ Item {
                         RowLayout {
                             Layout.fillWidth: true
                             TextField { id: comboInput; placeholderText: "l1+r1"; Layout.preferredWidth: 140 }
-                            ComboBox { id: comboType; model: ["key", "key_combo", "macro", "mouse_button"]; Layout.preferredWidth: 120 }
-                            TextField { id: comboValue; placeholderText: comboType.currentText === "key_combo" ? "super,shift,q" : "value"; Layout.fillWidth: true }
+                            ComboBox { id: comboType; model: ["key", "key_combo", "macro", "mouse_button", "launch"]; Layout.preferredWidth: 120 }
+                            TextField { id: comboValue; placeholderText: comboType.currentText === "key_combo" ? "super,shift,q" : comboType.currentText === "launch" ? "shell command" : "value"; Layout.fillWidth: true }
                             Button {
                                 text: "Add"
                                 onClicked: {

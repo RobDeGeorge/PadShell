@@ -236,6 +236,9 @@ pub enum Action {
     KeyCombo { keys: Vec<String> },
     Macro { name: String },
     MouseButton { button: String },
+    /// Run a shell command (via `sh -c`), detached from the daemon -
+    /// used to launch desktop apps straight from a button.
+    Launch { command: String },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

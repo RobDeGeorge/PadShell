@@ -40,10 +40,18 @@ pub fn default_config_path() -> PathBuf {
     PathBuf::from(home).join(".config/hypr/hyprland.conf")
 }
 
-pub fn load(path: &Path) -> std::io::Result<Vec<HyprAction>> {
+pub struct HyprConfig {
+    pub actions: Vec<HyprAction>,
+    /// Value of `$terminal` in the config, if set (used to run
+    /// Terminal=true desktop apps).
+    pub terminal: Option<String>,
+}
+
+pub fn load(path: &Path) -> std::io::Result<HyprConfig> {
     let mut parser = Parser::default();
     parser.parse_file(path, 0)?;
-    Ok(parser.actions)
+    let terminal = parser.vars.get("terminal").cloned();
+    Ok(HyprConfig { actions: parser.actions, terminal })
 }
 
 #[derive(Default)]
@@ -519,7 +527,7 @@ mod tests {
              binde = , J, resizeactive, -10 0\nsubmap = reset\n",
         )
         .unwrap();
-        let acts = load(&path).unwrap();
+        let acts = load(&path).unwrap().actions;
         assert_eq!(acts[0].label, "Run kitty");
         assert_eq!(acts[0].category, "Apps");
         assert_eq!(acts[0].keys.as_deref(), Some(&["super".to_string(), "enter".to_string()][..]));
@@ -539,7 +547,7 @@ mod real_config {
     #[test]
     #[ignore]
     fn dump_real() {
-        let acts = super::load(&super::default_config_path()).unwrap();
+        let acts = super::load(&super::default_config_path()).unwrap().actions;
         for a in acts {
             println!(
                 "[{}] {:<40} {:<22} {:?} {}",

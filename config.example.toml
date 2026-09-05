@@ -64,6 +64,12 @@ action = { type = "key_combo", keys = ["super", "q"] }
 input = "square"
 action = { type = "macro", name = "screenshot" }
 
+# Launch an app (any shell command, run detached via `sh -c`). The GUI's
+# Bindings tab lists every desktop app wofi shows and fills this in for you.
+[[bindings]]
+input = "options"
+action = { type = "launch", command = "firefox" }
+
 [[macros]]
 name = "screenshot"
 steps = [

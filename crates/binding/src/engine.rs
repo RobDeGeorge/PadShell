@@ -18,6 +18,8 @@ use crate::macro_::{self, PlaybackItem};
 pub enum EngineAction {
     Emit(OutputEvent),
     PlayMacro(Vec<PlaybackItem>),
+    /// Spawn a shell command, detached.
+    Launch(String),
 }
 
 struct LayerRuntime {
@@ -232,6 +234,9 @@ fn fire_action_tap(config: &Config, action: &Action, actions: &mut Vec<EngineAct
                 tracing::warn!(macro_name = %name, "binding references unknown macro");
             }
         }
+        Action::Launch { command } => {
+            actions.push(EngineAction::Launch(command.clone()));
+        }
         Action::MouseButton { button } => {
             if let Some(mb) = MouseButton::from_str(button) {
                 actions.push(EngineAction::Emit(OutputEvent::MouseButtonDown(mb)));
@@ -356,6 +361,24 @@ action = { type = "key", key = "space" }
         // holding, no new edge -> no repeat
         let actions = engine.tick(&pressed, Duration::from_millis(4));
         assert_eq!(actions.len(), 0);
+    }
+
+    #[test]
+    fn launch_binding_yields_launch_action_once() {
+        let config = Config::from_str(
+            r#"
+schema_version = 1
+[[bindings]]
+input = "options"
+action = { type = "launch", command = "firefox" }
+"#,
+        )
+        .unwrap();
+        let mut engine = BindingEngine::new(config);
+        let pressed = state_with_buttons(&[ButtonId::Options]);
+        let actions = engine.tick(&pressed, Duration::from_millis(4));
+        assert!(matches!(actions.as_slice(), [EngineAction::Launch(c)] if c == "firefox"));
+        assert!(engine.tick(&pressed, Duration::from_millis(4)).is_empty());
     }
 
     #[test]

@@ -154,8 +154,34 @@ fn run_worker(info: &HidrawInfo, device_id: &str, config_dir: &Path, sink: Arc<O
                     let sink = Arc::clone(&sink);
                     std::thread::spawn(move || play_macro(sink, items));
                 }
+                EngineAction::Launch(command) => launch(device_id, &command),
             }
         }
+    }
+}
+
+/// Spawns `sh -c command` in its own process group with stdio detached,
+/// so the app outlives the daemon and never blocks the read loop.
+fn launch(device_id: &str, command: &str) {
+    use std::os::unix::process::CommandExt;
+    use std::process::{Command, Stdio};
+    tracing::info!(device_id, command, "launching");
+    let result = Command::new("sh")
+        .arg("-c")
+        .arg(command)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .process_group(0)
+        .spawn();
+    match result {
+        Ok(mut child) => {
+            // Reap in the background so the child doesn't linger as a zombie.
+            std::thread::spawn(move || {
+                let _ = child.wait();
+            });
+        }
+        Err(err) => tracing::warn!(device_id, command, error = %err, "launch failed"),
     }
 }
 

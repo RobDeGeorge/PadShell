@@ -32,7 +32,9 @@ The Bindings tab works like a game's controls screen: the left column lists
 every `bind` from your Hyprland config (`~/.config/hypr/hyprland.conf`,
 following `source =` includes and `$variables`, grouped by the section
 comments in that file and given friendly names like "Close window" or
-"Go to workspace 3"), plus raw keyboard keys and mouse buttons. Pick an
+"Go to workspace 3"), every desktop app the wofi launcher shows (bound as a
+`launch` action that runs the app's Exec line), plus raw keyboard keys and
+mouse buttons. Pick an
 action, then press a button on the controller (or click one on the diagram)
 to bind it; or click a button first and pick its action. Bindings are stored
 as the `key_combo` that triggers the Hyprland bind, so the daemon needs no
