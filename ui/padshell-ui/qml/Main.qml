@@ -29,13 +29,27 @@ ApplicationWindow {
         anchors.fill: parent
         spacing: 0
 
-        TabBar {
-            id: tabBar
+        RowLayout {
             Layout.fillWidth: true
+            spacing: 0
 
-            TabButton { text: "Live Monitor" }
-            TabButton { text: "Bindings" }
-            TabButton { text: "Haptics" }
+            TabBar {
+                id: tabBar
+                Layout.fillWidth: true
+
+                TabButton { text: "Live Monitor" }
+                TabButton { text: "Bindings" }
+                TabButton { text: "Haptics" }
+            }
+
+            BatteryIndicator {
+                percent: liveBridge.battery_percent
+                charging: liveBridge.battery_charging
+                connected: liveBridge.connected
+                lowThreshold: configBridge.lowest_alert_percent
+                Layout.rightMargin: 12
+                Layout.leftMargin: 12
+            }
         }
 
         StackLayout {
@@ -54,6 +68,8 @@ ApplicationWindow {
 
             HapticsView {
                 haptics: hapticsBridge
+                config: configBridge
+                live: liveBridge
             }
         }
     }

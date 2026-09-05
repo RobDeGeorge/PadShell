@@ -6,6 +6,13 @@ import com.padshell.ui
 Item {
     id: root
     property var haptics
+    property var config
+    property var live
+
+    property var alerts: {
+        if (!config || !config.config_json) return [];
+        try { return JSON.parse(config.config_json).battery_alerts || []; } catch (e) { return []; }
+    }
 
     property var effectsData: {
         if (!haptics || !haptics.effects_json) return [];
@@ -23,9 +30,15 @@ Item {
         }
     }
 
-    ColumnLayout {
+    ScrollView {
         anchors.fill: parent
-        anchors.margins: 16
+        contentWidth: availableWidth
+        clip: true
+
+    ColumnLayout {
+        x: 16
+        y: 16
+        width: parent.width - 32
         spacing: 20
 
         RowLayout {
@@ -48,6 +61,7 @@ Item {
             GroupBox {
                 title: "Lightbar"
                 Layout.preferredWidth: 340
+                Layout.alignment: Qt.AlignTop
 
                 ColumnLayout {
                     anchors.fill: parent
@@ -129,6 +143,7 @@ Item {
             GroupBox {
                 title: "Rumble"
                 Layout.preferredWidth: 340
+                Layout.alignment: Qt.AlignTop
 
                 ColumnLayout {
                     anchors.fill: parent
@@ -209,6 +224,128 @@ Item {
             }
         }
 
-        Item { Layout.fillHeight: true }
+        // ---- Battery alerts ----
+        GroupBox {
+            title: "Battery alerts  (saved to this controller's profile)"
+            Layout.fillWidth: true
+
+            ColumnLayout {
+                anchors.fill: parent
+                spacing: 8
+
+                Text {
+                    text: "When the battery drops to a threshold (and isn't charging) the daemon switches the lightbar to the alert below; "
+                        + "the normal lightbar comes back once it's charged above it. Lowest matching threshold wins."
+                        + (root.live && root.live.battery_percent >= 0 ? "   Now: " + root.live.battery_percent + "%" : "")
+                    color: "#888888"; font.pixelSize: 11
+                    wrapMode: Text.Wrap
+                    Layout.fillWidth: true
+                }
+
+                Repeater {
+                    model: root.alerts
+                    delegate: RowLayout {
+                        required property var modelData
+                        required property int index
+                        Layout.fillWidth: true
+                        spacing: 10
+                        Rectangle {
+                            width: 22; height: 22; radius: 4
+                            color: modelData.lightbar.mode === "off" ? "#222222"
+                                : Qt.rgba(modelData.lightbar.r / 255, modelData.lightbar.g / 255, modelData.lightbar.b / 255, 1)
+                            border.color: "#555555"; border.width: 1
+                        }
+                        Text { text: "≤ " + modelData.below_percent + "%"; color: "#dddddd"; font.bold: true; Layout.preferredWidth: 60 }
+                        Text {
+                            text: modelData.lightbar.mode
+                                + (modelData.lightbar.mode === "rainbow" || modelData.lightbar.mode === "fade" || modelData.lightbar.mode === "strobe"
+                                    ? " · " + modelData.lightbar.period_ms + " ms" : "")
+                                + (modelData.rumble ? " · rumble" : "")
+                            color: "#aaaaaa"; Layout.fillWidth: true
+                        }
+                        Button {
+                            text: "Preview"
+                            enabled: haptics && haptics.has_lightbar
+                            onClicked: {
+                                if (modelData.lightbar.mode === "solid") haptics.set_lightbar(modelData.lightbar.r, modelData.lightbar.g, modelData.lightbar.b);
+                                else if (modelData.lightbar.mode !== "off")
+                                    haptics.start_animation(modelData.lightbar.mode, modelData.lightbar.r, modelData.lightbar.g, modelData.lightbar.b, modelData.lightbar.period_ms);
+                            }
+                        }
+                        Button {
+                            text: "Edit"
+                            onClicked: {
+                                alertEditIndex = index;
+                                alertPercent.value = modelData.below_percent;
+                                alertMode.currentIndex = alertMode.model.indexOf(modelData.lightbar.mode);
+                                alertR.value = modelData.lightbar.r; alertG.value = modelData.lightbar.g; alertB.value = modelData.lightbar.b;
+                                alertPeriod.value = modelData.lightbar.period_ms;
+                                alertRumble.checked = modelData.rumble;
+                            }
+                        }
+                        Button { text: "Remove"; onClicked: config.remove_battery_alert(index) }
+                    }
+                }
+
+                Text { visible: root.alerts.length === 0; text: "No alerts yet."; color: "#666666"; font.pixelSize: 11 }
+
+                Rectangle { Layout.fillWidth: true; height: 1; color: "#444444" }
+
+                property int alertEditIndex: -1
+                id: alertForm
+
+                RowLayout {
+                    Layout.fillWidth: true
+                    spacing: 8
+                    Text { text: alertForm.alertEditIndex >= 0 ? "Editing alert:" : "New alert:"; color: "#dddddd"; font.pixelSize: 12 }
+                    Text { text: "at or below"; color: "#aaaaaa" }
+                    SpinBox { id: alertPercent; from: 1; to: 100; value: 20; stepSize: 5; Layout.preferredWidth: 110 }
+                    Text { text: "%"; color: "#aaaaaa" }
+                    ComboBox { id: alertMode; model: ["solid", "fade", "strobe", "rainbow", "off"]; currentIndex: 1; Layout.preferredWidth: 110 }
+                    Rectangle {
+                        width: 22; height: 22; radius: 4
+                        color: Qt.rgba(alertR.value / 255, alertG.value / 255, alertB.value / 255, 1)
+                        border.color: "#555555"; border.width: 1
+                    }
+                    Button { text: "Use lightbar color"; onClicked: { alertR.value = redSlider.value; alertG.value = greenSlider.value; alertB.value = blueSlider.value; } }
+                    Button { text: "Red"; onClicked: { alertR.value = 255; alertG.value = 0; alertB.value = 0; } }
+                }
+                RowLayout {
+                    Layout.fillWidth: true
+                    spacing: 8
+                    Text { text: "R"; color: "#e07070" } SpinBox { id: alertR; from: 0; to: 255; value: 255; Layout.preferredWidth: 100 }
+                    Text { text: "G"; color: "#70e070" } SpinBox { id: alertG; from: 0; to: 255; value: 0; Layout.preferredWidth: 100 }
+                    Text { text: "B"; color: "#7070e0" } SpinBox { id: alertB; from: 0; to: 255; value: 0; Layout.preferredWidth: 100 }
+                    Text { text: "Speed (ms)"; color: "#aaaaaa" }
+                    SpinBox { id: alertPeriod; from: 100; to: 10000; value: 2000; stepSize: 100; Layout.preferredWidth: 120
+                        enabled: alertMode.currentText !== "solid" && alertMode.currentText !== "off" }
+                    CheckBox { id: alertRumble; text: "Rumble once"; checked: false }
+                    Item { Layout.fillWidth: true }
+                    Button {
+                        visible: alertForm.alertEditIndex >= 0
+                        text: "Cancel"
+                        onClicked: alertForm.alertEditIndex = -1
+                    }
+                    Button {
+                        text: alertForm.alertEditIndex >= 0 ? "Update" : "Add alert"
+                        highlighted: true
+                        onClicked: {
+                            if (config.set_battery_alert(alertForm.alertEditIndex, alertPercent.value, alertMode.currentText,
+                                    alertR.value, alertG.value, alertB.value, alertPeriod.value, alertRumble.checked)) {
+                                alertForm.alertEditIndex = -1;
+                                config.save();
+                            }
+                        }
+                    }
+                }
+                Text {
+                    text: "Alerts are saved immediately. The daemon picks them up on its next battery check (within ~15 s)."
+                    color: "#666666"; font.pixelSize: 11
+                }
+            }
+        }
+
+        Item { height: 16 }
+    }
     }
 }

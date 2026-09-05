@@ -4,5 +4,5 @@ pub mod engine;
 pub mod layer;
 pub mod macro_;
 
-pub use config::{Config, ConfigError, HapticsMode, HapticsState};
+pub use config::{BatteryAlert, Config, ConfigError, HapticsMode, HapticsState};
 pub use engine::{BindingEngine, EngineAction};

@@ -69,3 +69,16 @@ name = "screenshot"
 steps = [
   { type = "key_combo", keys = ["super", "shift", "s"] },
 ]
+
+# ---- Battery alerts: lightbar override when the battery gets low ----
+# Applies while battery <= below_percent and not charging; lowest matching
+# threshold wins. Normal lightbar state returns once charged above it.
+[[battery_alerts]]
+below_percent = 20
+rumble = true           # one short rumble when the alert first triggers
+  [battery_alerts.lightbar]
+  mode = "fade"         # off | solid | rainbow | fade | strobe
+  r = 255
+  g = 0
+  b = 0
+  period_ms = 1500

@@ -34,6 +34,33 @@ pub struct Config {
     pub macros: Vec<Macro>,
     #[serde(default)]
     pub haptics: HapticsState,
+    /// Lightbar/rumble overrides that kick in when the battery drops to
+    /// or below a threshold (and it isn't charging). The lowest
+    /// matching threshold wins; the normal `haptics` state comes back
+    /// once the battery is above every threshold again.
+    #[serde(default)]
+    pub battery_alerts: Vec<BatteryAlert>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct BatteryAlert {
+    /// Fires while battery percent <= this.
+    pub below_percent: u8,
+    /// Lightbar state to show while the alert is active.
+    pub lightbar: HapticsState,
+    /// Rumble briefly when the alert first becomes active.
+    pub rumble: bool,
+}
+
+impl Default for BatteryAlert {
+    fn default() -> Self {
+        BatteryAlert {
+            below_percent: 20,
+            lightbar: HapticsState { mode: HapticsMode::Fade, r: 255, g: 0, b: 0, period_ms: 2000 },
+            rumble: false,
+        }
+    }
 }
 
 /// The lightbar state to reapply the moment this controller (re)connects,
@@ -41,7 +68,7 @@ pub struct Config {
 /// `padshell_hid::haptics::LightbarAnimation`, kept as plain data here so
 /// this crate doesn't need to depend on `padshell-hid` for one small
 /// struct - the daemon, which already depends on both, converts it.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct HapticsState {
     pub mode: HapticsMode,
@@ -103,6 +130,7 @@ impl Config {
                 bindings: Vec::new(),
                 macros: Vec::new(),
                 haptics: HapticsState::default(),
+                battery_alerts: Vec::new(),
             }
         };
 

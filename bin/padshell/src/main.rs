@@ -63,6 +63,13 @@ enum Command {
         g: u8,
         b: u8,
     },
+    /// Print the connected controller's battery level. Plain text
+    /// (`85% discharging`) by default; `--json` prints a waybar-friendly
+    /// object with text/tooltip/percentage/class.
+    Battery {
+        #[arg(long)]
+        json: bool,
+    },
 }
 
 fn main() -> anyhow::Result<()> {
@@ -113,6 +120,30 @@ fn main() -> anyhow::Result<()> {
                 anyhow::bail!("no force-feedback capable device found for the connected controller");
             }
             haptics.rumble(weak, strong, duration_ms)?;
+            Ok(())
+        }
+        Command::Battery { json } => {
+            let mut infos = device::find_all(padshell_hid::ds4::DS4_VENDOR_ID, padshell_hid::ds4::DS4_PRODUCT_ID_V1)?;
+            infos.extend(device::find_all(padshell_hid::ds4::DS4_VENDOR_ID, padshell_hid::ds4::DS4_PRODUCT_ID_V2)?);
+            let status = infos.iter().find_map(|i| padshell_hid::battery::read(&i.hid_syspath));
+            match (status, json) {
+                (Some(s), false) => {
+                    println!("{}% {}", s.percent, if s.charging { "charging" } else { "discharging" });
+                }
+                (Some(s), true) => {
+                    let class = if s.charging { "charging" } else if s.percent <= 20 { "low" } else { "ok" };
+                    println!(
+                        "{{\"text\": \"{}%\", \"tooltip\": \"Controller battery {}% ({})\", \"percentage\": {}, \"class\": \"{}\"}}",
+                        s.percent,
+                        s.percent,
+                        if s.charging { "charging" } else { "discharging" },
+                        s.percent,
+                        class
+                    );
+                }
+                (None, false) => anyhow::bail!("no controller with a battery found"),
+                (None, true) => println!("{{\"text\": \"\", \"tooltip\": \"No controller\", \"class\": \"disconnected\"}}"),
+            }
             Ok(())
         }
         Command::Lightbar { r, g, b } => {

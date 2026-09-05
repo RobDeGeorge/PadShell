@@ -11,6 +11,7 @@ fn main() {
             "qml/components/StickPad.qml",
             "qml/components/AnalogBar.qml",
             "qml/components/ControllerDiagram.qml",
+            "qml/components/BatteryIndicator.qml",
         ]),
     )
     .file("src/config_bridge.rs")

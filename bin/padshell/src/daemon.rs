@@ -4,10 +4,10 @@ use std::sync::Arc;
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
-use padshell_binding::{BindingEngine, Config, EngineAction, HapticsMode};
+use padshell_binding::{BindingEngine, Config, EngineAction, HapticsMode, HapticsState};
 use padshell_hid::device::{self, BusType, HidrawDevice, HidrawInfo};
 use padshell_hid::ds4::{Ds4BtParser, Ds4UsbParser, DS4_PRODUCT_ID_V1, DS4_PRODUCT_ID_V2, DS4_VENDOR_ID};
-use padshell_hid::{ControllerReportParser, HapticsController, LightbarAnimation};
+use padshell_hid::{battery, AnimationHandle, ControllerReportParser, HapticsController, LightbarAnimation};
 use padshell_output::OutputSink;
 
 use crate::config_watch::ConfigWatcher;
@@ -16,6 +16,9 @@ use crate::config_watch::ConfigWatcher;
 /// have newly appeared or gone away. A controller unplug/replug (or a
 /// Bluetooth drop/reconnect) is picked up within one tick of this.
 const SCAN_INTERVAL: Duration = Duration::from_millis(750);
+
+/// How often a worker re-reads its controller's battery level.
+const BATTERY_POLL: Duration = Duration::from_secs(15);
 
 pub struct RunOptions {
     /// Root config directory (default `~/.config/padshell`). Each
@@ -106,7 +109,9 @@ fn run_worker(info: &HidrawInfo, device_id: &str, config_dir: &Path, sink: Arc<O
     let (config, profile_path) = Config::load_or_init_profile(config_dir, device_id)
         .map_err(|e| anyhow::anyhow!("failed to load profile for {device_id}: {e}"))?;
 
-    apply_haptics_state(info, &config.haptics);
+    let mut lightbar = Lightbar::new(info);
+    let mut battery_state = BatteryMonitor::new(info);
+    battery_state.refresh(&config, &mut lightbar, device_id);
 
     let mut engine = BindingEngine::new(config);
     let mut watcher = ConfigWatcher::new(&profile_path)?;
@@ -119,8 +124,8 @@ fn run_worker(info: &HidrawInfo, device_id: &str, config_dir: &Path, sink: Arc<O
     loop {
         if let Some(new_config) = watcher.poll_reload() {
             tracing::info!(device_id, "config changed, reloading");
-            apply_haptics_state(info, &new_config.haptics);
             engine.reload(new_config);
+            battery_state.force_refresh(engine.config(), &mut lightbar, device_id);
         }
 
         let n = hidraw.read_report(&mut buf)?;
@@ -132,6 +137,10 @@ fn run_worker(info: &HidrawInfo, device_id: &str, config_dir: &Path, sink: Arc<O
         let now = Instant::now();
         let dt = now.duration_since(last_tick);
         last_tick = now;
+
+        if battery_state.due(now) {
+            battery_state.refresh(engine.config(), &mut lightbar, device_id);
+        }
 
         let actions = engine.tick(&state, dt);
         for action in actions {
@@ -150,43 +159,146 @@ fn run_worker(info: &HidrawInfo, device_id: &str, config_dir: &Path, sink: Arc<O
     }
 }
 
-/// Pushes a profile's saved lightbar/animation state to the hardware.
-/// Called on every (re)connect and every config reload, so lightbar
-/// state always matches what's on disk for that controller.
-fn apply_haptics_state(info: &HidrawInfo, haptics: &padshell_binding::HapticsState) {
-    if matches!(haptics.mode, HapticsMode::Off) {
-        return;
+/// Owns one controller's lightbar so that switching state (config
+/// reload, battery alert starting/ending) stops the previous animation
+/// thread instead of stacking a second one on top of it.
+struct Lightbar {
+    controller: HapticsController,
+    animation: Option<AnimationHandle>,
+    applied: Option<HapticsState>,
+}
+
+impl Lightbar {
+    fn new(info: &HidrawInfo) -> Self {
+        Lightbar {
+            controller: HapticsController::discover(&info.hid_syspath),
+            animation: None,
+            applied: None,
+        }
     }
-    let controller = HapticsController::discover(&info.hid_syspath);
-    if !controller.has_lightbar() {
-        return;
+
+    /// Pushes a lightbar/animation state to the hardware if it differs
+    /// from what's currently applied.
+    fn apply(&mut self, haptics: &HapticsState) {
+        if self.applied.as_ref() == Some(haptics) {
+            return;
+        }
+        if let Some(handle) = self.animation.take() {
+            handle.stop();
+        }
+        self.applied = Some(haptics.clone());
+        if !self.controller.has_lightbar() {
+            return;
+        }
+        match haptics.mode {
+            HapticsMode::Off => {}
+            HapticsMode::Solid => {
+                let _ = self.controller.set_lightbar(haptics.r, haptics.g, haptics.b);
+            }
+            HapticsMode::Rainbow => {
+                self.animation =
+                    Some(self.controller.start_animation(LightbarAnimation::Rainbow { period_ms: haptics.period_ms }));
+            }
+            HapticsMode::Fade => {
+                self.animation = Some(self.controller.start_animation(LightbarAnimation::Fade {
+                    r: haptics.r,
+                    g: haptics.g,
+                    b: haptics.b,
+                    period_ms: haptics.period_ms,
+                }));
+            }
+            HapticsMode::Strobe => {
+                self.animation = Some(self.controller.start_animation(LightbarAnimation::Strobe {
+                    r: haptics.r,
+                    g: haptics.g,
+                    b: haptics.b,
+                    period_ms: haptics.period_ms,
+                }));
+            }
+        }
     }
-    match haptics.mode {
-        HapticsMode::Off => unreachable!(),
-        HapticsMode::Solid => {
-            let _ = controller.set_lightbar(haptics.r, haptics.g, haptics.b);
+
+    fn rumble(&self) {
+        if self.controller.has_rumble() {
+            let _ = self.controller.rumble(40000, 40000, 400);
         }
-        HapticsMode::Rainbow => {
-            // Handle intentionally dropped: the animation thread keeps
-            // running until `.stop()` is called, which nothing here
-            // needs to do for the daemon's lifetime.
-            let _ = controller.start_animation(LightbarAnimation::Rainbow { period_ms: haptics.period_ms });
+    }
+}
+
+impl Drop for Lightbar {
+    fn drop(&mut self) {
+        if let Some(handle) = self.animation.take() {
+            handle.stop();
         }
-        HapticsMode::Fade => {
-            let _ = controller.start_animation(LightbarAnimation::Fade {
-                r: haptics.r,
-                g: haptics.g,
-                b: haptics.b,
-                period_ms: haptics.period_ms,
-            });
+    }
+}
+
+/// Polls the battery and decides which lightbar state should be showing:
+/// the lowest matching battery alert, or the profile's normal state.
+struct BatteryMonitor {
+    hid_syspath: PathBuf,
+    next_poll: Instant,
+    /// Index of the alert currently active, if any.
+    active_alert: Option<usize>,
+}
+
+impl BatteryMonitor {
+    fn new(info: &HidrawInfo) -> Self {
+        BatteryMonitor {
+            hid_syspath: info.hid_syspath.clone(),
+            next_poll: Instant::now(),
+            active_alert: None,
         }
-        HapticsMode::Strobe => {
-            let _ = controller.start_animation(LightbarAnimation::Strobe {
-                r: haptics.r,
-                g: haptics.g,
-                b: haptics.b,
-                period_ms: haptics.period_ms,
-            });
+    }
+
+    fn due(&self, now: Instant) -> bool {
+        now >= self.next_poll
+    }
+
+    /// Config changed: forget which alert was active so a changed alert
+    /// re-applies, then re-evaluate immediately.
+    fn force_refresh(&mut self, config: &Config, lightbar: &mut Lightbar, device_id: &str) {
+        self.active_alert = None;
+        self.refresh(config, lightbar, device_id);
+    }
+
+    fn refresh(&mut self, config: &Config, lightbar: &mut Lightbar, device_id: &str) {
+        self.next_poll = Instant::now() + BATTERY_POLL;
+        let status = battery::read(&self.hid_syspath);
+        let matched = status.filter(|s| !s.charging).and_then(|s| {
+            config
+                .battery_alerts
+                .iter()
+                .enumerate()
+                .filter(|(_, a)| s.percent <= a.below_percent)
+                .min_by_key(|(_, a)| a.below_percent)
+                .map(|(i, _)| i)
+        });
+
+        match matched {
+            Some(i) => {
+                let alert = &config.battery_alerts[i];
+                if self.active_alert != Some(i) {
+                    tracing::info!(
+                        device_id,
+                        percent = status.map(|s| s.percent),
+                        threshold = alert.below_percent,
+                        "battery alert active"
+                    );
+                    if alert.rumble {
+                        lightbar.rumble();
+                    }
+                }
+                self.active_alert = Some(i);
+                lightbar.apply(&alert.lightbar);
+            }
+            None => {
+                if self.active_alert.is_some() {
+                    tracing::info!(device_id, "battery alert cleared");
+                }
+                self.active_alert = None;
+                lightbar.apply(&config.haptics);
+            }
         }
     }
 }

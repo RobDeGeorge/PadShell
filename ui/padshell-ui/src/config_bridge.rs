@@ -5,7 +5,7 @@
 
 use cxx_qt_lib::{QString, QStringList};
 use padshell_binding::config::{
-    Action, ActivationMode, Binding, Config, InputSpec, Layer, LayerActivation, Macro, MacroStep,
+    Action, BatteryAlert, HapticsMode, HapticsState, ActivationMode, Binding, Config, InputSpec, Layer, LayerActivation, Macro, MacroStep,
     Scroll, Settings, StickMouse,
 };
 use padshell_core::ButtonId;
@@ -25,6 +25,7 @@ fn empty_config() -> Config {
         bindings: Vec::new(),
         macros: Vec::new(),
         haptics: Default::default(),
+        battery_alerts: Vec::new(),
     }
 }
 
@@ -38,6 +39,9 @@ pub struct ConfigBridgeRust {
     hypr_actions_json: QString,
     hypr_config_path: QString,
     hypr_error: QString,
+    /// Highest `below_percent` among battery alerts (so the UI gauge
+    /// turns red at the same point the lightbar does); 20 if none.
+    lowest_alert_percent: i32,
 }
 
 impl Default for ConfigBridgeRust {
@@ -54,6 +58,7 @@ impl Default for ConfigBridgeRust {
                 &crate::hypr::default_config_path().to_string_lossy().to_string(),
             ),
             hypr_error: QString::default(),
+            lowest_alert_percent: 20,
         }
     }
 }
@@ -77,6 +82,7 @@ mod ffi {
         #[qproperty(QString, hypr_actions_json)]
         #[qproperty(QString, hypr_config_path)]
         #[qproperty(QString, hypr_error)]
+        #[qproperty(i32, lowest_alert_percent)]
         type ConfigBridge = super::ConfigBridgeRust;
 
         /// Load the config from disk (default path: ~/.config/padshell/config.toml).
@@ -117,6 +123,24 @@ mod ffi {
         /// chords are left alone.
         #[qinvokable]
         fn clear_bindings(self: Pin<&mut ConfigBridge>, layer_index: i32);
+
+        /// Add or replace (by index; -1 appends) a battery alert.
+        /// `mode` is off/solid/rainbow/fade/strobe.
+        #[qinvokable]
+        fn set_battery_alert(
+            self: Pin<&mut ConfigBridge>,
+            index: i32,
+            below_percent: i32,
+            mode: QString,
+            r: i32,
+            g: i32,
+            b: i32,
+            period_ms: i32,
+            rumble: bool,
+        ) -> bool;
+
+        #[qinvokable]
+        fn remove_battery_alert(self: Pin<&mut ConfigBridge>, index: i32);
 
         /// Parse the Hyprland config at hypr_config_path (empty = the
         /// default ~/.config/hypr/hyprland.conf) into hypr_actions_json.
@@ -174,6 +198,14 @@ impl ConfigBridge {
         let json = serde_json::to_string(&self.config)
             .unwrap_or_else(|_| "{}".to_string());
         self.as_mut().set_config_json(QString::from(&json));
+        let threshold = self
+            .config
+            .battery_alerts
+            .iter()
+            .map(|a| a.below_percent as i32)
+            .max()
+            .unwrap_or(20);
+        self.as_mut().set_lowest_alert_percent(threshold);
 
         let buttons: QStringList = ButtonId::ALL
             .iter()
@@ -313,6 +345,59 @@ impl ConfigBridge {
             bindings.retain(|b| matches!(b.input, InputSpec::Combo { .. }));
         }
         drop(rust);
+        self.as_mut().sync_to_qml();
+    }
+
+    pub fn set_battery_alert(
+        mut self: Pin<&mut Self>,
+        index: i32,
+        below_percent: i32,
+        mode: QString,
+        r: i32,
+        g: i32,
+        b: i32,
+        period_ms: i32,
+        rumble: bool,
+    ) -> bool {
+        let mode = match mode.to_string().as_str() {
+            "off" => HapticsMode::Off,
+            "solid" => HapticsMode::Solid,
+            "rainbow" => HapticsMode::Rainbow,
+            "fade" => HapticsMode::Fade,
+            "strobe" => HapticsMode::Strobe,
+            other => {
+                self.as_mut().set_error(format!("unknown lightbar mode {other}"));
+                return false;
+            }
+        };
+        let alert = BatteryAlert {
+            below_percent: below_percent.clamp(0, 100) as u8,
+            lightbar: HapticsState {
+                mode,
+                r: r.clamp(0, 255) as u8,
+                g: g.clamp(0, 255) as u8,
+                b: b.clamp(0, 255) as u8,
+                period_ms: period_ms.max(100) as u32,
+            },
+            rumble,
+        };
+        let mut rust = self.as_mut().rust_mut();
+        match usize::try_from(index).ok().filter(|&i| i < rust.config.battery_alerts.len()) {
+            Some(i) => rust.config.battery_alerts[i] = alert,
+            None => rust.config.battery_alerts.push(alert),
+        }
+        rust.config.battery_alerts.sort_by_key(|a| std::cmp::Reverse(a.below_percent));
+        drop(rust);
+        self.as_mut().set_last_error(QString::default());
+        self.as_mut().sync_to_qml();
+        true
+    }
+
+    pub fn remove_battery_alert(mut self: Pin<&mut Self>, index: i32) {
+        let alerts = &mut self.as_mut().rust_mut().config.battery_alerts;
+        if let Some(i) = usize::try_from(index).ok().filter(|&i| i < alerts.len()) {
+            alerts.remove(i);
+        }
         self.as_mut().sync_to_qml();
     }
 

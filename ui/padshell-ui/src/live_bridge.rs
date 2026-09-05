@@ -21,6 +21,9 @@ pub struct LiveBridgeRust {
     l2_analog: f64,
     r2_analog: f64,
     pressed_buttons: QStringList,
+    /// -1 when unknown / no controller.
+    battery_percent: i32,
+    battery_charging: bool,
     started: bool,
 }
 
@@ -45,6 +48,8 @@ mod ffi {
         #[qproperty(f64, l2_analog)]
         #[qproperty(f64, r2_analog)]
         #[qproperty(QStringList, pressed_buttons)]
+        #[qproperty(i32, battery_percent)]
+        #[qproperty(bool, battery_charging)]
         type LiveBridge = super::LiveBridgeRust;
 
         /// Starts the background read thread. Safe to call more than
@@ -80,6 +85,7 @@ fn run_reader_loop(qt_thread: cxx_qt::CxxQtThread<LiveBridge>) {
             let _ = qt_thread.queue(|mut qobject| {
                 qobject.as_mut().set_connected(false);
                 qobject.as_mut().set_bus_label(QString::from("Disconnected"));
+                qobject.as_mut().set_battery_percent(-1);
             });
             std::thread::sleep(Duration::from_secs(1));
             continue;
@@ -104,7 +110,16 @@ fn run_reader_loop(qt_thread: cxx_qt::CxxQtThread<LiveBridge>) {
 
         let mut buf = vec![0u8; parser.report_len()];
         let mut logged_first = false;
+        let mut next_battery = std::time::Instant::now();
         loop {
+            if std::time::Instant::now() >= next_battery {
+                next_battery = std::time::Instant::now() + Duration::from_secs(10);
+                let status = padshell_hid::battery::read(&info.hid_syspath);
+                let _ = qt_thread.queue(move |mut qobject| {
+                    qobject.as_mut().set_battery_percent(status.map(|s| s.percent as i32).unwrap_or(-1));
+                    qobject.as_mut().set_battery_charging(status.map(|s| s.charging).unwrap_or(false));
+                });
+            }
             let Ok(n) = hidraw.read_report(&mut buf) else {
                 tracing::warn!("live_bridge read_report failed, reconnecting");
                 break; // device gone - fall out to the reconnect loop

@@ -39,6 +39,14 @@ as the `key_combo` that triggers the Hyprland bind, so the daemon needs no
 Hyprland integration. A layer picker switches which layer you're editing;
 chords, layer management and macros live under "Advanced".
 
+The window's top-right corner shows the controller's battery (red and
+pulsing at or below the lowest alert threshold, blue while charging). Battery
+alerts, edited on the Haptics tab and stored in the controller's profile as
+`[[battery_alerts]]`, tell the daemon to switch the lightbar to a chosen
+color/animation (and optionally rumble once) when the battery drops to a
+threshold while not charging; the profile's normal lightbar state returns once
+it's charged back above it.
+
 ## Requirements
 
 - `/dev/hidraw*` access to the DS4 (USB or Bluetooth)
@@ -80,6 +88,10 @@ padshell run --dump-only [--changes-only]
 # Rumble/lightbar from the CLI (see also the GUI's Haptics tab)
 padshell rumble [weak] [strong] [--duration-ms 500]
 padshell lightbar <r> <g> <b>
+
+# Battery level (from the kernel's power_supply for the controller);
+# --json prints a waybar-style {text, tooltip, percentage, class} object
+padshell battery [--json]
 
 # GUI
 cargo run --release -p padshell-ui
