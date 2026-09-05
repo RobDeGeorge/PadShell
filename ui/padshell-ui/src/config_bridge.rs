@@ -113,6 +113,11 @@ mod ffi {
         #[qinvokable]
         fn unbind(self: Pin<&mut ConfigBridge>, layer_index: i32, input: QString);
 
+        /// Remove every single-button binding in a layer (-1 = default);
+        /// chords are left alone.
+        #[qinvokable]
+        fn clear_bindings(self: Pin<&mut ConfigBridge>, layer_index: i32);
+
         /// Parse the Hyprland config at hypr_config_path (empty = the
         /// default ~/.config/hypr/hyprland.conf) into hypr_actions_json.
         #[qinvokable]
@@ -297,6 +302,15 @@ impl ConfigBridge {
         let mut rust = self.as_mut().rust_mut();
         if let Some(bindings) = bindings_of(&mut rust.config, layer_index) {
             bindings.retain(|b| input_key(&b.input) != key);
+        }
+        drop(rust);
+        self.as_mut().sync_to_qml();
+    }
+
+    pub fn clear_bindings(mut self: Pin<&mut Self>, layer_index: i32) {
+        let mut rust = self.as_mut().rust_mut();
+        if let Some(bindings) = bindings_of(&mut rust.config, layer_index) {
+            bindings.retain(|b| matches!(b.input, InputSpec::Combo { .. }));
         }
         drop(rust);
         self.as_mut().sync_to_qml();

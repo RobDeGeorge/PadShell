@@ -273,6 +273,23 @@ Item {
     }
     Item { id: listFocusSink; focus: true }
 
+    Dialog {
+        id: clearConfirm
+        title: "Clear all bindings?"
+        modal: true
+        anchors.centerIn: parent
+        standardButtons: Dialog.Yes | Dialog.No
+        Text {
+            text: "Unbind every button in \"" + root.layerNames[root.layerIndex + 1] + "\"?\nChords are kept. Nothing is written until you press Save."
+            color: "#dddddd"
+        }
+        onAccepted: {
+            config.clear_bindings(root.layerIndex);
+            root.cancel();
+            root.flash = "All buttons unbound";
+        }
+    }
+
     // ------------------------------------------------------------------
     // Layout
     // ------------------------------------------------------------------
@@ -301,6 +318,11 @@ Item {
             }
             Button { text: "Reload Hyprland"; onClicked: config.load_hypr("") }
             Rectangle { width: 1; height: 24; color: "#333333" }
+            Button {
+                text: "Clear all"
+                enabled: root.boundButtons.length > 0
+                onClicked: clearConfirm.open()
+            }
             Button { text: "Save"; onClicked: config.save() }
             Button { text: "Reload"; onClicked: { config.load(); root.cancel(); } }
         }
@@ -562,6 +584,26 @@ Item {
                                         color: cell.binding ? "#e6e6e6" : "#666666"
                                         font.pixelSize: 12
                                         elide: Text.ElideRight
+                                    }
+                                    Rectangle {
+                                        visible: cell.binding !== null && (cellHover.containsMouse || cell.isSelected)
+                                        width: 20; height: 20; radius: 10
+                                        color: xHover.containsMouse ? "#c0392b" : "#3a3a3a"
+                                        Text { anchors.centerIn: parent; text: "✕"; color: "#dddddd"; font.pixelSize: 11 }
+                                        MouseArea {
+                                            id: xHover
+                                            anchors.fill: parent
+                                            hoverEnabled: true
+                                            cursorShape: Qt.PointingHandCursor
+                                            onClicked: {
+                                                config.unbind(root.layerIndex, cell.modelData);
+                                                root.cancel();
+                                                root.flash = root.glyph(cell.modelData) + " unbound";
+                                            }
+                                        }
+                                        ToolTip.visible: xHover.containsMouse
+                                        ToolTip.text: "Unbind"
+                                        ToolTip.delay: 400
                                     }
                                 }
                                 MouseArea {
