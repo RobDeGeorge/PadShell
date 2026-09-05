@@ -14,6 +14,7 @@ fn main() {
             "qml/components/BatteryIndicator.qml",
         ]),
     )
+    .qrc_resources(["qml/assets/ds4.svg"])
     .file("src/config_bridge.rs")
     .file("src/live_bridge.rs")
     .file("src/haptics_bridge.rs")
