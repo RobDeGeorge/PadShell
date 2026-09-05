@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=padshell
+GenericName=Controller settings
+Comment=Bind a DualShock 4 to your desktop: bindings, lightbar, rumble, battery alerts
+Exec=sh -c "pgrep -x padshell-ui >/dev/null && hyprctl dispatch focuswindow class:padshell-ui >/dev/null || exec padshell-ui"
+Icon=input-gaming
+Terminal=false
+Categories=Settings;
+Keywords=controller;gamepad;dualshock;ps4;bindings;
+StartupWMClass=padshell-ui

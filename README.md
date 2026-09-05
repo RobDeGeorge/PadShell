@@ -97,6 +97,10 @@ padshell battery [--json]
 
 # GUI
 cargo run --release -p padshell-ui
+
+# Optional: add the GUI to your app launcher (wofi/rofi/etc.). Adjust the
+# Exec path if padshell-ui isn't on PATH for your launcher.
+cp desktop/padshell-ui.desktop ~/.local/share/applications/
 ```
 
 Config hot-reloads on save; no need to restart the daemon after editing bindings
