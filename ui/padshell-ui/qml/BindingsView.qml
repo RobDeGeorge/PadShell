@@ -214,8 +214,19 @@ Item {
 
     function assign(button, action) {
         const aj = root.actionToJson(action);
-        if (aj.length > 0 && config.set_binding(root.layerIndex, button, aj)) {
-            root.flash = root.glyph(button) + "  →  " + action.label;
+        if (aj.length === 0) { root.pendingAction = null; root.selectedButton = ""; return; }
+        // One button per action: binding it here moves it off any other
+        // button in this layer, like a game's controls screen.
+        let moved = "";
+        for (const other of root.buttonsForAction(action.id)) {
+            if (other !== button) {
+                config.unbind(root.layerIndex, other);
+                moved = other;
+            }
+        }
+        if (config.set_binding(root.layerIndex, button, aj)) {
+            root.flash = root.glyph(button) + "  →  " + action.label
+                + (moved.length > 0 ? "   (moved from " + root.glyph(moved) + ")" : "");
         }
         root.pendingAction = null;
         root.selectedButton = "";
