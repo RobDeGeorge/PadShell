@@ -24,10 +24,20 @@ or disappearing rather than exiting when one is unplugged. Reconnecting
 controller's saved lightbar/animation state automatically.
 
 A QML GUI (`padshell-ui`) is included: a Live Monitor tab (DS4-shaped diagram
-showing live button/stick/trigger state), a Bindings tab (click a button on the
-diagram to bind it, or edit layers/macros/combos), and a Haptics tab (lightbar
+showing live button/stick/trigger state), a Bindings tab, and a Haptics tab (lightbar
 color, rumble, and animated effects — rainbow/fade/strobe — with a small
 persisted library of named presets).
+
+The Bindings tab works like a game's controls screen: the left column lists
+every `bind` from your Hyprland config (`~/.config/hypr/hyprland.conf`,
+following `source =` includes and `$variables`, grouped by the section
+comments in that file and given friendly names like "Close window" or
+"Go to workspace 3"), plus raw keyboard keys and mouse buttons. Pick an
+action, then press a button on the controller (or click one on the diagram)
+to bind it; or click a button first and pick its action. Bindings are stored
+as the `key_combo` that triggers the Hyprland bind, so the daemon needs no
+Hyprland integration. A layer picker switches which layer you're editing;
+chords, layer management and macros live under "Advanced".
 
 ## Requirements
 

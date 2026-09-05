@@ -8,6 +8,9 @@ import QtQuick.Layouts
 Item {
     id: root
     property var activeButtons: []
+    // Live presses drawn on top of activeButtons (Bindings tab)
+    property var pressedButtons: []
+    property string selectedButton: ""
     property bool clickable: false
     property real leftStickX: 0
     property real leftStickY: 0
@@ -20,6 +23,14 @@ Item {
     function isActive(name) {
         return root.activeButtons.includes(name);
     }
+    function isPressed(name) {
+        return root.pressedButtons.includes(name);
+    }
+    function stickBorder(name) {
+        if (root.selectedButton === name) return "#ffd54f";
+        if (root.isPressed(name)) return "#ffb300";
+        return root.isActive(name) ? "#4caf50" : "#555555";
+    }
 
     width: 820
     height: 420
@@ -29,6 +40,8 @@ Item {
         property string buttonName: ""
         shape: "circle"
         active: root.isActive(buttonName)
+        pressed: root.isPressed(buttonName)
+        selected: root.selectedButton === buttonName
         MouseArea {
             anchors.fill: parent
             enabled: root.clickable
@@ -73,7 +86,8 @@ Item {
         label: "L3"
         stickX: root.leftStickX
         stickY: root.leftStickY
-        border.color: root.isActive("l3") ? "#4caf50" : "#555555"
+        border.color: root.stickBorder("l3")
+        border.width: root.selectedButton === "l3" ? 3 : 1
         MouseArea {
             anchors.fill: parent
             enabled: root.clickable
@@ -86,7 +100,8 @@ Item {
         label: "R3"
         stickX: root.rightStickX
         stickY: root.rightStickY
-        border.color: root.isActive("r3") ? "#4caf50" : "#555555"
+        border.color: root.stickBorder("r3")
+        border.width: root.selectedButton === "r3" ? 3 : 1
         MouseArea {
             anchors.fill: parent
             enabled: root.clickable

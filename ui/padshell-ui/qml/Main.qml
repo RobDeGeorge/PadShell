@@ -6,14 +6,14 @@ import com.padshell.ui
 ApplicationWindow {
     id: window
     visible: true
-    width: 900
-    height: 640
+    width: 1200
+    height: 780
     title: "padshell"
     color: "#1e1e1e"
 
     ConfigBridge {
         id: configBridge
-        Component.onCompleted: load()
+        Component.onCompleted: { load(); load_hypr(""); }
     }
 
     LiveBridge {
@@ -49,6 +49,7 @@ ApplicationWindow {
 
             BindingsView {
                 config: configBridge
+                live: liveBridge
             }
 
             HapticsView {

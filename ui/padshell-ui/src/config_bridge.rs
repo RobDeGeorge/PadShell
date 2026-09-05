@@ -35,6 +35,9 @@ pub struct ConfigBridgeRust {
     button_names: QStringList,
     key_names: QStringList,
     last_error: QString,
+    hypr_actions_json: QString,
+    hypr_config_path: QString,
+    hypr_error: QString,
 }
 
 impl Default for ConfigBridgeRust {
@@ -46,6 +49,11 @@ impl Default for ConfigBridgeRust {
             button_names: QStringList::default(),
             key_names: QStringList::default(),
             last_error: QString::default(),
+            hypr_actions_json: QString::from("[]"),
+            hypr_config_path: QString::from(
+                &crate::hypr::default_config_path().to_string_lossy().to_string(),
+            ),
+            hypr_error: QString::default(),
         }
     }
 }
@@ -66,6 +74,9 @@ mod ffi {
         #[qproperty(QStringList, button_names)]
         #[qproperty(QStringList, key_names)]
         #[qproperty(QString, last_error)]
+        #[qproperty(QString, hypr_actions_json)]
+        #[qproperty(QString, hypr_config_path)]
+        #[qproperty(QString, hypr_error)]
         type ConfigBridge = super::ConfigBridgeRust;
 
         /// Load the config from disk (default path: ~/.config/padshell/config.toml).
@@ -85,6 +96,27 @@ mod ffi {
 
         #[qinvokable]
         fn remove_binding(self: Pin<&mut ConfigBridge>, index: i32);
+
+        /// Bind `input` in a layer (-1 = default layer), replacing any
+        /// existing binding for that same input so a button only ever
+        /// does one thing per layer - the "assign a button" operation
+        /// the game-style Bindings tab uses.
+        #[qinvokable]
+        fn set_binding(
+            self: Pin<&mut ConfigBridge>,
+            layer_index: i32,
+            input: QString,
+            action_json: QString,
+        ) -> bool;
+
+        /// Remove every binding for `input` in a layer (-1 = default).
+        #[qinvokable]
+        fn unbind(self: Pin<&mut ConfigBridge>, layer_index: i32, input: QString);
+
+        /// Parse the Hyprland config at hypr_config_path (empty = the
+        /// default ~/.config/hypr/hyprland.conf) into hypr_actions_json.
+        #[qinvokable]
+        fn load_hypr(self: Pin<&mut ConfigBridge>, path: QString) -> bool;
 
         #[qinvokable]
         fn add_layer(self: Pin<&mut ConfigBridge>, name: QString, activate_button: QString, hold: bool) -> bool;
@@ -226,6 +258,73 @@ impl ConfigBridge {
             bindings.remove(i);
         }
         self.as_mut().sync_to_qml();
+    }
+
+    pub fn set_binding(
+        mut self: Pin<&mut Self>,
+        layer_index: i32,
+        input: QString,
+        action_json: QString,
+    ) -> bool {
+        let Some(input) = parse_input(&input.to_string()) else {
+            self.as_mut().set_error("unknown button name in input");
+            return false;
+        };
+        let action: Action = match serde_json::from_str(&action_json.to_string()) {
+            Ok(a) => a,
+            Err(err) => {
+                self.as_mut().set_error(err);
+                return false;
+            }
+        };
+        let mut rust = self.as_mut().rust_mut();
+        let Some(bindings) = bindings_of(&mut rust.config, layer_index) else {
+            drop(rust);
+            self.as_mut().set_error("invalid layer index");
+            return false;
+        };
+        let key = input_key(&input);
+        bindings.retain(|b| input_key(&b.input) != key);
+        bindings.push(Binding { input, action });
+        drop(rust);
+        self.as_mut().set_last_error(QString::default());
+        self.as_mut().sync_to_qml();
+        true
+    }
+
+    pub fn unbind(mut self: Pin<&mut Self>, layer_index: i32, input: QString) {
+        let key = normalize_input_string(&input.to_string());
+        let mut rust = self.as_mut().rust_mut();
+        if let Some(bindings) = bindings_of(&mut rust.config, layer_index) {
+            bindings.retain(|b| input_key(&b.input) != key);
+        }
+        drop(rust);
+        self.as_mut().sync_to_qml();
+    }
+
+    pub fn load_hypr(mut self: Pin<&mut Self>, path: QString) -> bool {
+        let path_str = path.to_string();
+        let path = if path_str.trim().is_empty() {
+            crate::hypr::default_config_path()
+        } else {
+            PathBuf::from(path_str.trim())
+        };
+        self.as_mut()
+            .set_hypr_config_path(QString::from(&path.to_string_lossy().to_string()));
+        match crate::hypr::load(&path) {
+            Ok(actions) => {
+                let json = serde_json::to_string(&actions).unwrap_or_else(|_| "[]".into());
+                self.as_mut().set_hypr_actions_json(QString::from(&json));
+                self.as_mut().set_hypr_error(QString::default());
+                true
+            }
+            Err(err) => {
+                self.as_mut().set_hypr_actions_json(QString::from("[]"));
+                self.as_mut()
+                    .set_hypr_error(QString::from(&format!("{}: {err}", path.display())));
+                false
+            }
+        }
     }
 
     pub fn add_layer(mut self: Pin<&mut Self>, name: QString, activate_button: QString, hold: bool) -> bool {
@@ -384,6 +483,35 @@ impl ConfigBridge {
         }
         self.as_mut().sync_to_qml();
     }
+}
+
+/// Order-insensitive identity for an input, so "l1+r1" and "r1+l1"
+/// are the same binding slot.
+fn input_key(input: &InputSpec) -> String {
+    match input {
+        InputSpec::Single(s) => s.clone(),
+        InputSpec::Combo { combo } => {
+            let mut c = combo.clone();
+            c.sort();
+            c.join("+")
+        }
+    }
+}
+
+fn normalize_input_string(s: &str) -> String {
+    let mut parts: Vec<&str> = s.split('+').map(str::trim).collect();
+    if parts.len() > 1 {
+        parts.sort();
+    }
+    parts.join("+")
+}
+
+fn bindings_of(config: &mut Config, layer_index: i32) -> Option<&mut Vec<Binding>> {
+    if layer_index < 0 {
+        return Some(&mut config.bindings);
+    }
+    let idx = usize::try_from(layer_index).ok()?;
+    config.layers.get_mut(idx).map(|l| &mut l.bindings)
 }
 
 fn parse_input(s: &str) -> Option<InputSpec> {

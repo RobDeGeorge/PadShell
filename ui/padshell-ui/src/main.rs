@@ -1,6 +1,7 @@
 mod config_bridge;
 mod device_profile;
 mod haptics_bridge;
+mod hypr;
 mod live_bridge;
 
 use cxx_qt_lib::{QGuiApplication, QQmlApplicationEngine, QString, QUrl};
