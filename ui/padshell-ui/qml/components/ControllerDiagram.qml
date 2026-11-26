@@ -1,8 +1,7 @@
 import QtQuick
-import QtQuick.Layouts
 
-// DS4 diagram: an SVG of the controller (assets/ds4.svg) with live overlays
-// placed at the coordinates documented in that file. Two uses:
+// Generic controller layout with shared live overlays. The archived ds4.svg
+// is retained for a future controller-specific view. Two uses:
 //  - Live Monitor: activeButtons = currently pressed buttons (read-only)
 //  - Bindings: activeButtons = buttons that already have a binding,
 //    clickable so tapping one opens/edits its binding.
@@ -20,6 +19,8 @@ Item {
     property real l2Analog: 0
     property real r2Analog: 0
     signal buttonClicked(string name)
+
+    readonly property real controlScale: 1.12
 
     readonly property color activeColor: "#4caf50"
     readonly property color pressedColor: "#ffb300"
@@ -48,7 +49,7 @@ Item {
 
     Image {
         anchors.fill: parent
-        source: "../assets/ds4.svg"
+        source: "../assets/generic.svg"
         sourceSize: Qt.size(820 * 2, 420 * 2) // crisp when scaled
         fillMode: Image.PreserveAspectFit
         smooth: true
@@ -57,6 +58,7 @@ Item {
     // Translucent highlight that lights up a region of the SVG.
     component Hit: Rectangle {
         id: hit
+        scale: root.controlScale
         property string buttonName: ""
         property real cx: 0
         property real cy: 0
@@ -83,7 +85,7 @@ Item {
         }
     }
     component RoundHit: Hit {
-        width: 40; height: 40; radius: 20
+        width: 44; height: 44; radius: 22
     }
 
     // ---- Triggers: analog fill drawn bottom-up, plus press highlight ----
@@ -113,76 +115,76 @@ Item {
             anchors.topMargin: 2
             visible: parent.value > 0.005
             text: parent.value.toFixed(2)
-            color: "#b0b3ba"
+            color: "#bbbbbb"
             font.pixelSize: 9
         }
     }
-    TriggerHit { cx: 170; cy: 39; buttonName: "l2"; value: root.l2Analog }
-    TriggerHit { cx: 650; cy: 39; buttonName: "r2"; value: root.r2Analog }
+    TriggerHit { cx: 198; cy: 24; buttonName: "l2"; value: root.l2Analog }
+    TriggerHit { cx: 622; cy: 24; buttonName: "r2"; value: root.r2Analog }
 
     // ---- Shoulders ----
-    Hit { cx: 170; cy: 73; width: 104; height: 26; radius: 10; buttonName: "l1" }
-    Hit { cx: 650; cy: 73; width: 104; height: 26; radius: 10; buttonName: "r1" }
+    Hit { cx: 198; cy: 74; width: 104; height: 26; radius: 10; buttonName: "l1" }
+    Hit { cx: 622; cy: 74; width: 104; height: 26; radius: 10; buttonName: "r1" }
 
     // ---- Share / touchpad / options ----
-    Hit { cx: 262; cy: 120; width: 18; height: 34; radius: 9; buttonName: "share" }
-    Hit { cx: 410; cy: 133; width: 170; height: 90; radius: 14; buttonName: "touchpad_click" }
-    Hit { cx: 558; cy: 120; width: 18; height: 34; radius: 9; buttonName: "options" }
+    Hit { cx: 260; cy: 137; width: 18; height: 34; radius: 9; buttonName: "share" }
+    Hit { cx: 410; cy: 147; width: 220; height: 108; radius: 14; buttonName: "touchpad_click" }
+    Hit { cx: 560; cy: 137; width: 18; height: 34; radius: 9; buttonName: "options" }
 
     // ---- PS button ----
-    Hit { cx: 410; cy: 238; width: 30; height: 30; radius: 15; buttonName: "ps" }
+    Hit { cx: 410; cy: 284; width: 30; height: 30; radius: 15; buttonName: "ps" }
 
     // ---- D-pad arms ----
-    Hit { cx: 170; cy: 151; width: 22; height: 26; radius: 4; buttonName: "dpad_up" }
-    Hit { cx: 170; cy: 199; width: 22; height: 26; radius: 4; buttonName: "dpad_down" }
-    Hit { cx: 146; cy: 175; width: 26; height: 22; radius: 4; buttonName: "dpad_left" }
-    Hit { cx: 194; cy: 175; width: 26; height: 22; radius: 4; buttonName: "dpad_right" }
+    Hit { cx: 136; cy: 142; width: 28; height: 34; radius: 4; buttonName: "dpad_up" }
+    Hit { cx: 136; cy: 234; width: 28; height: 34; radius: 4; buttonName: "dpad_down" }
+    Hit { cx: 90; cy: 188; width: 34; height: 28; radius: 4; buttonName: "dpad_left" }
+    Hit { cx: 182; cy: 188; width: 34; height: 28; radius: 4; buttonName: "dpad_right" }
 
     // ---- Face buttons ----
-    RoundHit { cx: 650; cy: 135; buttonName: "triangle" }
-    RoundHit { cx: 650; cy: 215; buttonName: "cross" }
-    RoundHit { cx: 610; cy: 175; buttonName: "square" }
-    RoundHit { cx: 690; cy: 175; buttonName: "circle" }
+    RoundHit { cx: 684; cy: 128; buttonName: "triangle" }
+    RoundHit { cx: 684; cy: 248; buttonName: "cross" }
+    RoundHit { cx: 624; cy: 188; buttonName: "square" }
+    RoundHit { cx: 744; cy: 188; buttonName: "circle" }
 
     // ---- Sticks: a cap that slides inside the SVG well ----
     component Stick: Item {
         id: stick
+        scale: root.controlScale
         property string buttonName: ""
         property real cx: 0
         property real cy: 0
         property real sx: 0
         property real sy: 0
         readonly property real travel: 10
-        width: 76; height: 76
+        width: 96; height: 96
         x: cx - width / 2
         y: cy - height / 2
 
+        Rectangle { // cover the SVG resting cap during live movement
+            anchors.centerIn: parent
+            width: 88; height: 88; radius: 44
+            color: "#1c1c1c"
+            border.color: "#999999"
+        }
+
         Rectangle { // cap
-            width: 54; height: 54; radius: 27
+            width: 70; height: 70; radius: 35
             x: parent.width / 2 - width / 2 + stick.sx * stick.travel
             y: parent.height / 2 - height / 2 + stick.sy * stick.travel
-            gradient: Gradient {
-                GradientStop { position: 0.0; color: "#45484f" }
-                GradientStop { position: 1.0; color: "#1f2024" }
-            }
+            color: "#858585"
             border.color: {
                 const c = root.ringColor(stick.buttonName);
-                return c === Qt.color("transparent") ? "#0c0c0e" : c;
+                return c === Qt.color("transparent") ? "#eeeeee" : c;
             }
-            border.width: root.selectedButton === stick.buttonName ? 3 : 2
+            border.width: root.selectedButton === stick.buttonName ? 3 : 1
             Behavior on x { NumberAnimation { duration: 30 } }
             Behavior on y { NumberAnimation { duration: 30 } }
             Behavior on border.color { ColorAnimation { duration: 60 } }
 
-            Rectangle { // concave dish
-                anchors.centerIn: parent
-                width: 40; height: 40; radius: 20
-                color: "#15161a"
-                border.color: "#2c2e34"
-            }
             Rectangle { // deflection dot
                 anchors.centerIn: parent
                 width: 8; height: 8; radius: 4
+                visible: Math.abs(stick.sx) > 0.12 || Math.abs(stick.sy) > 0.12
                 color: (Math.abs(stick.sx) > 0.12 || Math.abs(stick.sy) > 0.12) ? root.activeColor : "#3a3d44"
             }
             Rectangle { // click highlight
@@ -200,18 +202,18 @@ Item {
             onClicked: root.buttonClicked(stick.buttonName)
         }
     }
-    Stick { cx: 285; cy: 250; buttonName: "l3"; sx: root.leftStickX; sy: root.leftStickY }
-    Stick { cx: 535; cy: 250; buttonName: "r3"; sx: root.rightStickX; sy: root.rightStickY }
+    Stick { cx: 275; cy: 326; buttonName: "l3"; sx: root.leftStickX; sy: root.leftStickY }
+    Stick { cx: 545; cy: 326; buttonName: "r3"; sx: root.rightStickX; sy: root.rightStickY }
 
     // Stick readouts under the grips
     Text {
-        x: 285 - width / 2; y: 300
+        x: 275 - width / 2; y: 393
         text: "L  " + root.leftStickX.toFixed(2) + ", " + root.leftStickY.toFixed(2)
-        color: "#7d8088"; font.pixelSize: 10; font.family: "monospace"
+        color: "#aaaaaa"; font.pixelSize: 12; font.family: "monospace"
     }
     Text {
-        x: 535 - width / 2; y: 300
+        x: 545 - width / 2; y: 393
         text: "R  " + root.rightStickX.toFixed(2) + ", " + root.rightStickY.toFixed(2)
-        color: "#7d8088"; font.pixelSize: 10; font.family: "monospace"
+        color: "#aaaaaa"; font.pixelSize: 12; font.family: "monospace"
     }
 }

@@ -2,6 +2,7 @@
 
 use std::fs::{File, OpenOptions};
 use std::io::Read;
+use std::os::fd::{AsFd, BorrowedFd};
 use std::path::PathBuf;
 
 use thiserror::Error;
@@ -12,6 +13,8 @@ pub enum HidError {
     Udev(#[from] std::io::Error),
     #[error("no matching hidraw device found")]
     NotFound,
+    #[error("controller disconnected")]
+    Disconnected,
 }
 
 /// The transport a HID device is connected over - determines which
@@ -107,8 +110,14 @@ pub fn enumerate() -> Result<Vec<HidrawInfo>, HidError> {
             continue;
         };
 
+        // The MAC (Bluetooth) / serial (USB) lives in the HID device's
+        // uevent as HID_UNIQ; udev exposes that as a property. There is
+        // no `uniq` sysfs attribute on the hid device itself (only on its
+        // child input device), so try the attribute first for kernels that
+        // add one, then the property.
         let uniq = hid_parent
             .attribute_value("uniq")
+            .or_else(|| hid_parent.property_value("HID_UNIQ"))
             .and_then(|v| v.to_str())
             .map(str::trim)
             .filter(|v| !v.is_empty())
@@ -165,6 +174,12 @@ pub fn find(vendor_id: u16, product_id: u16) -> Result<HidrawInfo, HidError> {
 /// A blocking-read handle on an open hidraw device.
 pub struct HidrawDevice {
     file: File,
+}
+
+impl AsFd for HidrawDevice {
+    fn as_fd(&self) -> BorrowedFd<'_> {
+        self.file.as_fd()
+    }
 }
 
 impl HidrawDevice {

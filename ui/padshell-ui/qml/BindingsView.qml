@@ -180,12 +180,12 @@ Item {
     // ------------------------------------------------------------------
     readonly property var buttonOrder: ["cross", "circle", "square", "triangle", "dpad_up", "dpad_down",
         "dpad_left", "dpad_right", "l1", "r1", "l2", "r2", "l3", "r3", "share", "options", "touchpad_click", "ps"]
-    readonly property var glyphs: ({
-        cross: "✕", circle: "○", square: "◻", triangle: "△",
-        dpad_up: "▲", dpad_down: "▼", dpad_left: "◀", dpad_right: "▶",
-        l1: "L1", r1: "R1", l2: "L2", r2: "R2", l3: "L3", r3: "R3",
-        share: "SHARE", options: "OPTIONS", touchpad_click: "TOUCHPAD", ps: "PS"
-    })
+    // Labels come from the profile's controller kind (Rust: ButtonId::label),
+    // so a DS4 profile shows ✕/○/◻/△ and an Xbox profile shows A/B/X/Y.
+    readonly property var glyphs: {
+        try { return JSON.parse(root.config ? root.config.button_labels_json : "{}"); }
+        catch (e) { return {}; }
+    }
     function glyph(name) { return root.glyphs[name] || name; }
 
     // ------------------------------------------------------------------

@@ -117,6 +117,8 @@ impl Config {
         if profile_path.exists() {
             return Ok((Config::load(&profile_path)?, profile_path));
         }
+        // Seeding from default.toml: its [device] block (if any) describes
+        // some other controller, so start this profile's blank.
 
         let default_path = config_dir.join("default.toml");
         let config = if default_path.exists() {
@@ -134,9 +136,39 @@ impl Config {
             }
         };
 
+        let config = Config { device: DeviceConfig::default(), ..config };
         std::fs::create_dir_all(&devices_dir)?;
         std::fs::write(&profile_path, toml::to_string_pretty(&config)?)?;
         Ok((config, profile_path))
+    }
+
+    /// Records which controller this profile is for, writing the file
+    /// back only if something actually changed (so a hand-edited profile
+    /// isn't rewritten on every connect).
+    pub fn ensure_device_identity(
+        &mut self,
+        path: &Path,
+        vendor_id: u16,
+        product_id: u16,
+        kind: padshell_core::ControllerKind,
+        name: &str,
+    ) -> Result<(), ConfigError> {
+        let wanted = DeviceConfig {
+            vendor_id: Some(vendor_id),
+            product_id: Some(product_id),
+            kind: Some(kind),
+            name: Some(name.to_string()),
+        };
+        let d = &self.device;
+        if d.vendor_id == wanted.vendor_id
+            && d.product_id == wanted.product_id
+            && d.kind == wanted.kind
+            && d.name == wanted.name
+        {
+            return Ok(());
+        }
+        self.device = wanted;
+        self.save(path)
     }
 
     /// Persists this config back to `path` (used to remember lightbar
@@ -176,10 +208,20 @@ impl Config {
     }
 }
 
+/// Which physical controller this profile belongs to. Filled in by the
+/// daemon when a profile is first created (and refreshed on connect if
+/// missing) so the GUI can label buttons the way the pad prints them.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
 pub struct DeviceConfig {
     pub vendor_id: Option<u16>,
     pub product_id: Option<u16>,
+    /// `ds4`, `xbox` or `generic`. Bindings use one shared button
+    /// vocabulary regardless (`cross` is A, `share` is View, `ps` is the
+    /// Guide button); this only changes how the GUI displays them.
+    pub kind: Option<padshell_core::ControllerKind>,
+    /// Kernel-reported device name, for humans reading the file.
+    pub name: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -187,6 +229,11 @@ pub struct DeviceConfig {
 pub struct Settings {
     pub poll_hz: u32,
     pub stick_deadzone: f32,
+    /// Hyprland windows that get the controller to themselves: while one
+    /// is focused, padshell emits nothing so a game reading the pad
+    /// directly doesn't also receive keypresses. Each entry matches a
+    /// window class exactly or a substring of its title (case-insensitive).
+    pub pause_when_focused: Vec<String>,
 }
 
 impl Default for Settings {
@@ -194,6 +241,7 @@ impl Default for Settings {
         Settings {
             poll_hz: 250,
             stick_deadzone: 0.08,
+            pause_when_focused: Vec::new(),
         }
     }
 }

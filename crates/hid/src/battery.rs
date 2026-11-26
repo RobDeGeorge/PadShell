@@ -16,11 +16,26 @@ pub struct BatteryStatus {
     pub charging: bool,
 }
 
-/// Reads the battery for a HID device given its sysfs path (e.g.
-/// `/sys/bus/hid/devices/0005:054C:09CC.0015`). `None` if the kernel
-/// exposes no power supply for it.
-pub fn read(hid_syspath: &Path) -> Option<BatteryStatus> {
-    let supplies = fs::read_dir(hid_syspath.join("power_supply")).ok()?;
+/// Reads the battery for a device given its sysfs path (e.g.
+/// `/sys/bus/hid/devices/0005:054C:09CC.0015`). Also checks a couple
+/// of parent levels, since an evdev pad's input node may sit one or
+/// two directories below the device that registers the supply (an Xbox
+/// pad over Bluetooth via `hid-microsoft`/`xpadneo`). `None` if the
+/// kernel exposes no power supply for it - `xpad` over USB, say.
+pub fn read(syspath: &Path) -> Option<BatteryStatus> {
+    let mut dir = Some(syspath);
+    for _ in 0..3 {
+        let d = dir?;
+        if let Some(status) = read_in(&d.join("power_supply")) {
+            return Some(status);
+        }
+        dir = d.parent();
+    }
+    None
+}
+
+fn read_in(power_supply: &Path) -> Option<BatteryStatus> {
+    let supplies = fs::read_dir(power_supply).ok()?;
     for entry in supplies.filter_map(Result::ok) {
         let dir = entry.path();
         let Some(percent) = read_trimmed(&dir.join("capacity")).and_then(|s| s.parse::<u8>().ok()) else {

@@ -44,6 +44,14 @@ pub struct ConfigBridgeRust {
     /// Highest `below_percent` among battery alerts (so the UI gauge
     /// turns red at the same point the lightbar does); 20 if none.
     lowest_alert_percent: i32,
+    /// `ds4` / `xbox` / `generic` for the profile's controller, so QML
+    /// can pick the right button glyphs.
+    controller_kind: QString,
+    /// Kernel-reported name of the controller this profile belongs to.
+    device_name: QString,
+    /// JSON object: canonical button name -> label as printed on this
+    /// kind of controller ("cross" -> "✕" on a DS4, "A" on an Xbox pad).
+    button_labels_json: QString,
 }
 
 impl Default for ConfigBridgeRust {
@@ -62,6 +70,9 @@ impl Default for ConfigBridgeRust {
             hypr_error: QString::default(),
             apps_json: QString::from("[]"),
             lowest_alert_percent: 20,
+            controller_kind: QString::from("generic"),
+            device_name: QString::default(),
+            button_labels_json: QString::from("{}"),
         }
     }
 }
@@ -87,6 +98,9 @@ mod ffi {
         #[qproperty(QString, hypr_error)]
         #[qproperty(QString, apps_json)]
         #[qproperty(i32, lowest_alert_percent)]
+        #[qproperty(QString, controller_kind)]
+        #[qproperty(QString, device_name)]
+        #[qproperty(QString, button_labels_json)]
         type ConfigBridge = super::ConfigBridgeRust;
 
         /// Load the config from disk (default path: ~/.config/padshell/config.toml).
@@ -216,6 +230,16 @@ impl ConfigBridge {
             .map(|b| QString::from(b.as_str()))
             .collect();
         self.as_mut().set_button_names(buttons);
+
+        let kind = self.config.device.kind.unwrap_or_default();
+        self.as_mut().set_controller_kind(QString::from(kind.as_str()));
+        let name = self.config.device.name.clone().unwrap_or_else(|| kind.display_name().to_string());
+        self.as_mut().set_device_name(QString::from(&name));
+        let labels: serde_json::Map<String, serde_json::Value> = ButtonId::ALL
+            .iter()
+            .map(|b| (b.as_str().to_string(), serde_json::Value::from(b.label(kind))))
+            .collect();
+        self.as_mut().set_button_labels_json(QString::from(&serde_json::Value::Object(labels).to_string()));
 
         let keys: QStringList = padshell_output::keymap::KEY_NAMES
             .iter()

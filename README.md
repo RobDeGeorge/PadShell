@@ -1,23 +1,69 @@
 # padshell
 
-Drive a Linux desktop with a PS4 (DualShock 4) controller: bind buttons, chords,
-and macros to keyboard keys, use the right stick as a mouse, and control the
-controller's lightbar color/rumble — including animated effects.
+Drive a Linux desktop with a game controller (DualShock 4, Xbox, or any pad
+the kernel has a driver for): bind buttons, chords, and macros to keyboard
+keys, use the right stick as a mouse, and control the DS4's lightbar
+color/rumble — including animated effects.
 
-Reads the controller via raw `hidraw` (no evdev/SDL2 — this keeps a path open to
-touchpad/gyro access later) and injects output via Linux `uinput`, so it works
-under Wayland/Hyprland with no XTest dependency.
+A DS4 is read via raw `hidraw` (keeping a path open to touchpad/gyro access
+later); Xbox and other gamepads are read via the kernel's `evdev` nodes.
+Output is injected via Linux `uinput`, so it works under Wayland/Hyprland
+with no XTest dependency.
 
 ## Status
 
 DS4 over USB and Bluetooth are both implemented and verified against real
-hardware (a CUH-ZCT2x DualShock 4). Other controllers (Xbox) are not
-implemented yet — see `ControllerReportParser` for the extension point.
+hardware (a CUH-ZCT2x DualShock 4).
+
+Xbox controllers (and any other gamepad with a kernel driver — 8BitDo,
+Logitech, Stadia, ...) are read through `/dev/input/event*`. That's how
+Xbox pads reach userspace on Linux anyway: over USB the `xpad` driver owns
+the device and exposes no hidraw node at all, and over Bluetooth
+(`hid-microsoft` or `xpadneo`) evdev is the well-trodden path. Xbox pads
+get rumble but no lightbar. The evdev decoding was verified against a
+virtual Xbox-shaped uinput device; a physical pad hasn't been tried yet on
+this machine, so report anything that decodes oddly (`padshell run
+--dump-only --changes-only` shows exactly what's being read).
+
+Every pad uses one shared button vocabulary in profiles, so bindings are
+portable between controllers:
+
+| Profile name     | DS4            | Xbox                      |
+|------------------|----------------|---------------------------|
+| `cross`          | ✕              | A                         |
+| `circle`         | ○              | B                         |
+| `square`         | ◻              | X                         |
+| `triangle`       | △              | Y                         |
+| `l1` / `r1`      | L1 / R1        | LB / RB                   |
+| `l2` / `r2`      | L2 / R2        | LT / RT                   |
+| `l3` / `r3`      | L3 / R3        | LS / RS (stick click)     |
+| `share`          | Share          | View / Back               |
+| `options`        | Options        | Menu / Start              |
+| `ps`             | PS             | Xbox / Guide              |
+| `touchpad_click` | Touchpad click | Share (Series pads)       |
+
+The Xbox names (`a`, `lb`, `view`, `guide`, ...) are accepted as aliases
+when hand-editing a profile. The GUI labels buttons the way the connected
+pad prints them, based on the `kind` the daemon records in each profile.
+
+### Coexisting with RetroArch, Steam and games
+
+padshell never grabs (`EVIOCGRAB`) a controller. It just reads the same
+node RetroArch's `udev` joypad driver, SDL, and Steam read, so every
+connected pad keeps working in games exactly as before, with padshell's
+bindings layered on top. Each controller — two Xbox pads, a DS4 and an
+Xbox pad, whatever — gets its own profile and its own worker in the
+daemon, so bindings and lightbar state are per-pad.
+
+The one thing to keep in mind: bindings still fire while a game is in the
+foreground, so a button bound to a key will also send that key to the game.
+Keep desktop-only bindings behind a layer (hold L1 / LB, say), or stop the
+daemon while playing, if that gets in the way.
 
 The daemon supports any number of controllers connected at once, each with
 its own bindings and lightbar state: it identifies a controller by its
-Bluetooth MAC (or, over USB where no such serial exists, the physical port
-it's plugged into), loads a profile for that identity from
+Bluetooth MAC (or, over USB where no such serial exists — DS4 and Xbox
+alike — the physical port it's plugged into), loads a profile for that identity from
 `~/.config/padshell/devices/`, and keeps watching for controllers appearing
 or disappearing rather than exiting when one is unplugged. Reconnecting
 (replugging, or a Bluetooth controller waking back up) reapplies that
@@ -72,7 +118,8 @@ sudo usermod -aG input $USER   # log out/in (or `newgrp input`) to take effect
 ```sh
 cargo build --release
 
-# List hidraw devices and their vendor/product IDs (find your controller)
+# List detected controllers, how each is read (hidraw/evdev), and which
+# profile file each maps to. --all also dumps every hidraw node.
 padshell devices
 
 # Decode a raw HID report file without hardware (for testing/debugging the parser)
@@ -137,9 +184,12 @@ the LED files at ~33fps.
 
 ## Extending to a new controller
 
-Implement `padshell_hid::ControllerReportParser` for the new device's HID report
-layout, and register its vendor/product ID alongside `DS4_VENDOR_ID` in
-`crates/hid/src/device.rs` / the daemon's device lookup.
+Anything the kernel exposes as a gamepad (`BTN_SOUTH` + `ABS_X`) already
+works through the evdev backend (`crates/hid/src/evdev_pad.rs`); to label
+it as its own family rather than "generic", add a `ControllerKind` and
+teach `EvdevPadInfo::kind` to recognize it. For a controller that needs
+raw HID access (touchpad, gyro), implement `padshell_hid::ControllerReportParser`
+for its report layout and add it to `crates/hid/src/controller.rs`.
 
 ## systemd
 

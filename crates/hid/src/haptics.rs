@@ -32,17 +32,19 @@ pub struct HapticsController {
 }
 
 impl HapticsController {
-    /// Finds the currently connected DS4 (USB or Bluetooth) and
-    /// discovers its haptics, if any is connected.
-    pub fn discover_ds4() -> Option<Self> {
-        let mut candidates =
-            crate::device::find_all(crate::ds4::DS4_VENDOR_ID, crate::ds4::DS4_PRODUCT_ID_V1).ok()?;
-        candidates.extend(
-            crate::device::find_all(crate::ds4::DS4_VENDOR_ID, crate::ds4::DS4_PRODUCT_ID_V2)
-                .unwrap_or_default(),
-        );
-        let info = candidates.into_iter().next()?;
-        Some(Self::discover(&info.hid_syspath))
+    /// Haptics for the first connected controller of any kind.
+    pub fn discover_first() -> Option<Self> {
+        crate::controller::first().map(|info| info.haptics())
+    }
+
+    /// Uses `path` for rumble when LED-based discovery found no evdev
+    /// node - the case for pads with no lightbar (Xbox), whose evdev
+    /// node is the same one we read input from.
+    pub fn with_evdev_fallback(mut self, path: Option<PathBuf>) -> Self {
+        if self.evdev_path.is_none() {
+            self.evdev_path = path.filter(|p| p.exists());
+        }
+        self
     }
 
     /// Discovers the lightbar LEDs and force-feedback evdev node

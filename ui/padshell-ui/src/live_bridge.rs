@@ -1,19 +1,22 @@
-//! Bridges live DS4 state to QML: a background thread independently
-//! reads/decodes hidraw reports (never touching uinput - the UI must
-//! never fight the running daemon for the virtual devices) and marshals
-//! updates onto the Qt thread via CxxQtThread::queue().
+//! Bridges live controller state to QML: a background thread
+//! independently reads the controller (hidraw for a DS4, evdev for an
+//! Xbox or other pad; never touching uinput - the UI must never fight
+//! the running daemon for the virtual devices) and marshals updates onto
+//! the Qt thread via CxxQtThread::queue().
 
 use cxx_qt_lib::{QString, QStringList};
 use padshell_core::{ButtonId, ControllerState};
-use padshell_hid::device::{self, BusType};
-use padshell_hid::ds4::{Ds4BtParser, Ds4UsbParser, DS4_PRODUCT_ID_V1, DS4_PRODUCT_ID_V2, DS4_VENDOR_ID};
-use padshell_hid::ControllerReportParser;
+use padshell_hid::controller;
+use padshell_hid::device::BusType;
 use std::time::Duration;
 
 #[derive(Default)]
 pub struct LiveBridgeRust {
     connected: bool,
     bus_label: QString,
+    /// `ds4` / `xbox` / `generic`.
+    controller_kind: QString,
+    device_name: QString,
     left_stick_x: f64,
     left_stick_y: f64,
     right_stick_x: f64,
@@ -41,6 +44,8 @@ mod ffi {
         #[qml_element]
         #[qproperty(bool, connected)]
         #[qproperty(QString, bus_label)]
+        #[qproperty(QString, controller_kind)]
+        #[qproperty(QString, device_name)]
         #[qproperty(f64, left_stick_x)]
         #[qproperty(f64, left_stick_y)]
         #[qproperty(f64, right_stick_x)]
@@ -80,8 +85,8 @@ impl LiveBridge {
 fn run_reader_loop(qt_thread: cxx_qt::CxxQtThread<LiveBridge>) {
     tracing::info!("live_bridge reader thread starting");
     loop {
-        let Some(info) = find_ds4() else {
-            tracing::debug!("no DS4 found, retrying in 1s");
+        let Some(info) = controller::first() else {
+            tracing::debug!("no controller found, retrying in 1s");
             let _ = qt_thread.queue(|mut qobject| {
                 qobject.as_mut().set_connected(false);
                 qobject.as_mut().set_bus_label(QString::from("Disconnected"));
@@ -91,41 +96,51 @@ fn run_reader_loop(qt_thread: cxx_qt::CxxQtThread<LiveBridge>) {
             continue;
         };
 
-        let parser: Box<dyn ControllerReportParser + Send> = match info.bus {
-            BusType::Bluetooth => Box::new(Ds4BtParser::new()),
-            _ => Box::new(Ds4UsbParser::new()),
-        };
         let bus_label = match info.bus {
             BusType::Bluetooth => "Bluetooth",
             BusType::Usb => "USB",
             BusType::Other(_) => "Unknown",
         };
 
-        tracing::info!(path = ?info.path, bus = ?info.bus, "live_bridge opening DS4");
-        let Ok(mut hidraw) = device::HidrawDevice::open(&info.path) else {
-            tracing::warn!(path = ?info.path, "live_bridge failed to open hidraw device");
-            std::thread::sleep(Duration::from_secs(1));
-            continue;
+        tracing::info!(kind = %info.kind.as_str(), name = %info.name, path = ?info.input_path(), bus = ?info.bus, "live_bridge opening controller");
+        let mut source = match info.open() {
+            Ok(source) => source,
+            Err(err) => {
+                tracing::warn!(path = ?info.input_path(), error = %err, "live_bridge failed to open controller");
+                std::thread::sleep(Duration::from_secs(1));
+                continue;
+            }
         };
+        {
+            let kind = info.kind.as_str().to_string();
+            let name = info.name.clone();
+            let bus_label = bus_label.to_string();
+            let _ = qt_thread.queue(move |mut qobject| {
+                qobject.as_mut().set_connected(true);
+                qobject.as_mut().set_bus_label(QString::from(&bus_label));
+                qobject.as_mut().set_controller_kind(QString::from(&kind));
+                qobject.as_mut().set_device_name(QString::from(&name));
+            });
+        }
 
-        let mut buf = vec![0u8; parser.report_len()];
         let mut logged_first = false;
         let mut next_battery = std::time::Instant::now();
         loop {
             if std::time::Instant::now() >= next_battery {
                 next_battery = std::time::Instant::now() + Duration::from_secs(10);
-                let status = padshell_hid::battery::read(&info.hid_syspath);
+                let status = info.battery();
                 let _ = qt_thread.queue(move |mut qobject| {
                     qobject.as_mut().set_battery_percent(status.map(|s| s.percent as i32).unwrap_or(-1));
                     qobject.as_mut().set_battery_charging(status.map(|s| s.charging).unwrap_or(false));
                 });
             }
-            let Ok(n) = hidraw.read_report(&mut buf) else {
-                tracing::warn!("live_bridge read_report failed, reconnecting");
-                break; // device gone - fall out to the reconnect loop
-            };
-            let Some(state) = parser.parse(&buf[..n]) else {
-                continue;
+            let state = match source.next_state(Duration::from_millis(500)) {
+                Ok(Some(state)) => state,
+                Ok(None) => continue, // idle pad; loop back to refresh battery
+                Err(err) => {
+                    tracing::warn!(error = %err, "live_bridge read failed, reconnecting");
+                    break; // device gone - fall out to the reconnect loop
+                }
             };
             if !logged_first {
                 tracing::info!(?state, "live_bridge first decoded state");
@@ -158,10 +173,4 @@ fn apply_state(mut qobject: Pin<&mut LiveBridge>, state: &ControllerState, bus_l
         .map(|b| QString::from(b.as_str()))
         .collect();
     qobject.as_mut().set_pressed_buttons(pressed);
-}
-
-fn find_ds4() -> Option<device::HidrawInfo> {
-    let mut candidates = device::find_all(DS4_VENDOR_ID, DS4_PRODUCT_ID_V1).ok()?;
-    candidates.extend(device::find_all(DS4_VENDOR_ID, DS4_PRODUCT_ID_V2).unwrap_or_default());
-    candidates.into_iter().next()
 }

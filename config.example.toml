@@ -1,5 +1,16 @@
 schema_version = 1
 
+# Filled in automatically per profile (~/.config/padshell/devices/*.toml):
+# which controller the profile belongs to. `kind` picks the GUI's button
+# labels; bindings always use the same names on every pad (cross = A,
+# circle = B, square = X, triangle = Y, l1/r1 = LB/RB, l2/r2 = LT/RT,
+# share = View/Back, options = Menu/Start, ps = Xbox/Guide,
+# touchpad_click = the Xbox Series Share button). The Xbox names above
+# are accepted as aliases in hand-written configs.
+# [device]
+# kind = "xbox"        # ds4 | xbox | generic
+# name = "Xbox Wireless Controller"
+
 [settings]
 poll_hz = 250
 stick_deadzone = 0.08

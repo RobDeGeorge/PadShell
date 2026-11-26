@@ -1,5 +1,4 @@
 import QtQuick
-import QtQuick.Controls
 import QtQuick.Layouts
 import com.padshell.ui
 
@@ -13,6 +12,7 @@ Item {
         spacing: 16
 
         RowLayout {
+            Layout.fillWidth: true
             spacing: 8
             Rectangle {
                 width: 12
@@ -22,11 +22,14 @@ Item {
             }
             Text {
                 text: root.live
-                    ? (root.live.connected ? "Connected (" + root.live.bus_label + ")" : "Disconnected")
+                    ? (root.live.connected
+                        ? root.live.device_name + "  ·  " + root.live.bus_label
+                        : "Disconnected")
                     : "..."
                 color: "#dddddd"
                 font.pixelSize: 14
             }
+
         }
 
         ControllerDiagram {

@@ -1,155 +1,60 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<!--
-  DualShock 4 front view, drawn on the same 820x420 canvas ControllerDiagram.qml
-  uses, so QML overlays can be placed by the coordinates listed here:
-    L2/R2 triggers   : x 128..212 / 608..692, y 22..56
-    L1/R1 shoulders  : x 118..222 / 598..702, y 60..86
-    Touchpad         : x 325..495, y 88..178
-    Share / Options  : centred (262,120) / (558,120), 14x30 pills
-    D-pad centre     : (170,175), arm length 36, arm width 22
-    Face centre      : (650,175), r 17, spread 40
-    PS button        : (410,238) r 13
-    Left / right stick: (285,250) / (535,250), well r 36, cap r 27
--->
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 820 420" width="820" height="420">
-  <defs>
-    <linearGradient id="body" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0" stop-color="#3a3d44"/>
-      <stop offset="0.45" stop-color="#2b2d33"/>
-      <stop offset="1" stop-color="#1b1c20"/>
-    </linearGradient>
-    <linearGradient id="bodyEdge" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0" stop-color="#5a5e68"/>
-      <stop offset="1" stop-color="#0d0d10"/>
-    </linearGradient>
-    <linearGradient id="shoulder" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0" stop-color="#4a4d55"/>
-      <stop offset="1" stop-color="#26282d"/>
-    </linearGradient>
-    <linearGradient id="trigger" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0" stop-color="#34363c"/>
-      <stop offset="1" stop-color="#1e1f23"/>
-    </linearGradient>
-    <linearGradient id="touchpad" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0" stop-color="#26282d"/>
-      <stop offset="1" stop-color="#17181b"/>
-    </linearGradient>
-    <radialGradient id="well" cx="0.5" cy="0.5" r="0.5">
-      <stop offset="0" stop-color="#0a0a0c"/>
-      <stop offset="0.75" stop-color="#101114"/>
-      <stop offset="1" stop-color="#3a3d44"/>
-    </radialGradient>
-    <radialGradient id="btn" cx="0.4" cy="0.35" r="0.7">
-      <stop offset="0" stop-color="#3d4048"/>
-      <stop offset="1" stop-color="#1c1d21"/>
-    </radialGradient>
-    <linearGradient id="lightbar" x1="0" y1="0" x2="1" y2="0">
-      <stop offset="0" stop-color="#1d5fa8" stop-opacity="0.2"/>
-      <stop offset="0.5" stop-color="#3d8bff"/>
-      <stop offset="1" stop-color="#1d5fa8" stop-opacity="0.2"/>
-    </linearGradient>
-    <filter id="soft" x="-10%" y="-10%" width="120%" height="120%">
-      <feGaussianBlur stdDeviation="1.2"/>
-    </filter>
-    <filter id="glow" x="-50%" y="-50%" width="200%" height="200%">
-      <feGaussianBlur stdDeviation="3"/>
-    </filter>
-  </defs>
-
-  <!-- Triggers (L2 / R2) sit behind the shoulders -->
-  <g>
-    <path d="M132,56 L128,34 C127,27 132,22 140,22 L200,22 C208,22 213,27 212,34 L208,56 Z" fill="url(#trigger)" stroke="#0e0e10" stroke-width="1.5"/>
-    <path d="M612,56 L608,34 C607,27 612,22 620,22 L680,22 C688,22 693,27 692,34 L688,56 Z" fill="url(#trigger)" stroke="#0e0e10" stroke-width="1.5"/>
-    <text x="170" y="44" font-family="sans-serif" font-size="13" font-weight="600" fill="#8a8d95" text-anchor="middle">L2</text>
-    <text x="650" y="44" font-family="sans-serif" font-size="13" font-weight="600" fill="#8a8d95" text-anchor="middle">R2</text>
+<!-- DualShock 4 front elevation. Transparent 820 x 420 canvas.
+     Overlay anchors (ControllerDiagram.qml): shoulders 210/610, y 61;
+     triggers 210/610, y 27; touchpad 410,132 (220x108);
+     share/options 280/540,112; d-pad 210,163, offset 28;
+     face buttons 610,163, offset 40; PS 410,255;
+     sticks 315/505,253, well radius 46, cap radius 35. -->
+<svg xmlns="http://www.w3.org/2000/svg" width="820" height="420" viewBox="0 0 820 420">
+  <title>DualShock 4 — front elevation</title>
+  <desc>Minimal front-view DualShock 4 controller with a single shell outline and essential controls.</desc>
+  <path d="M168 56 L170 29 Q171 22 180 22 H240 Q249 22 250 29 L252 56Z" fill="#292929" stroke="#dddddd" stroke-width="1" transform="translate(0 -12)" />
+  <path d="M158 86 V72 Q160 60 173 60 H247 Q260 60 262 72 V86Z" fill="#292929" stroke="#dddddd" stroke-width="1" transform="translate(0 -12)" />
+  <g fill="#eeeeee" font-family="sans-serif" font-size="11" text-anchor="middle" transform="translate(0 -12)">
+    <text x="210" y="43" font-family="monospace">L2</text>
+    <text x="210" y="78" font-family="monospace">L1</text>
   </g>
-
-  <!-- Shoulders (L1 / R1) -->
-  <g>
-    <path d="M118,86 C118,70 126,60 140,60 L200,60 C214,60 222,70 222,86 Z" fill="url(#shoulder)" stroke="#0e0e10" stroke-width="1.5"/>
-    <path d="M598,86 C598,70 606,60 620,60 L680,60 C694,60 702,70 702,86 Z" fill="url(#shoulder)" stroke="#0e0e10" stroke-width="1.5"/>
-    <text x="170" y="79" font-family="sans-serif" font-size="12" font-weight="600" fill="#9a9da5" text-anchor="middle">L1</text>
-    <text x="650" y="79" font-family="sans-serif" font-size="12" font-weight="600" fill="#9a9da5" text-anchor="middle">R1</text>
+  <path d="M568 56 L570 29 Q571 22 580 22 H640 Q649 22 650 29 L652 56Z" fill="#292929" stroke="#dddddd" stroke-width="1" transform="translate(0 -12)" />
+  <path d="M558 86 V72 Q560 60 573 60 H647 Q660 60 662 72 V86Z" fill="#292929" stroke="#dddddd" stroke-width="1" transform="translate(0 -12)" />
+  <g fill="#eeeeee" font-family="sans-serif" font-size="11" text-anchor="middle" transform="translate(0 -12)">
+    <text x="610" y="43" font-family="monospace">R2</text>
+    <text x="610" y="78" font-family="monospace">R1</text>
   </g>
-
-  <!-- Main body -->
-  <path id="bodyPath"
-        d="M130,100
-           C180,80 300,74 410,74
-           C520,74 640,80 690,100
-           C740,120 775,190 785,270
-           C795,340 770,402 720,410
-           C680,416 650,382 630,342
-           C612,306 566,304 522,296
-           C470,286 350,286 298,296
-           C254,304 208,306 190,342
-           C170,382 140,416 100,410
-           C50,402 25,340 35,270
-           C45,190 80,120 130,100 Z"
-        fill="url(#body)" stroke="url(#bodyEdge)" stroke-width="2"/>
-  <!-- top highlight -->
-  <path d="M150,100 C210,86 320,82 410,82 C500,82 610,86 670,100" fill="none" stroke="#ffffff" stroke-opacity="0.08" stroke-width="3" filter="url(#soft)"/>
-
-  <!-- Light bar -->
-  <rect x="335" y="76" width="150" height="5" rx="2.5" fill="url(#lightbar)" filter="url(#glow)"/>
-  <rect x="335" y="76" width="150" height="5" rx="2.5" fill="url(#lightbar)"/>
-
-  <!-- Touchpad -->
-  <rect x="325" y="88" width="170" height="90" rx="14" fill="url(#touchpad)" stroke="#0c0c0e" stroke-width="1.5"/>
-  <rect x="329" y="92" width="162" height="82" rx="11" fill="none" stroke="#ffffff" stroke-opacity="0.05"/>
-
-  <!-- Share / Options -->
-  <g>
-    <rect x="255" y="105" width="14" height="30" rx="7" fill="url(#btn)" stroke="#0c0c0e" stroke-width="1.2"/>
-    <rect x="551" y="105" width="14" height="30" rx="7" fill="url(#btn)" stroke="#0c0c0e" stroke-width="1.2"/>
-    <text x="262" y="150" font-family="sans-serif" font-size="8" letter-spacing="0.5" fill="#7d8088" text-anchor="middle">SHARE</text>
-    <text x="558" y="150" font-family="sans-serif" font-size="8" letter-spacing="0.5" fill="#7d8088" text-anchor="middle">OPTIONS</text>
+  <path id="housing" d="M208 79 C168 77 141 94 126 129 C110 166 93 225 82 277 C73 319 72 352 86 370 C99 389 127 390 145 376 C163 363 180 330 199 296 C210 276 225 262 242 260 C259 282 277 301 310 304 C350 309 368 288 384 288 H436 C452 288 470 309 510 304 C543 301 561 282 578 260 C595 262 610 276 621 296 C640 330 657 363 675 376 C693 390 721 389 734 370 C748 352 747 319 738 277 C727 225 710 166 694 129 C679 94 652 77 612 79 C554 79 510 72 410 72 C310 72 266 79 208 79Z" fill="#292929" stroke="#f2f2f2" stroke-width="1.8" />
+  <path d="M311 78 H509 Q521 78 520 91 L516 174 Q516 186 504 186 H316 Q304 186 304 174 L300 91 Q299 78 311 78Z" fill="#292929" stroke="#dddddd" stroke-width="1" />
+  <rect x="273" y="97" width="14" height="30" rx="7" fill="#292929" stroke="#dddddd" stroke-width="1" />
+  <text x="280" y="90" text-anchor="middle" fill="#eeeeee" font-family="monospace" font-size="7" letter-spacing=".5">SHARE</text>
+  <rect x="533" y="97" width="14" height="30" rx="7" fill="#292929" stroke="#dddddd" stroke-width="1" />
+  <text x="540" y="90" text-anchor="middle" fill="#eeeeee" font-family="monospace" font-size="7" letter-spacing=".5">OPTIONS</text>
+  <circle cx="410" cy="255" r="14" fill="#292929" stroke="#dddddd" stroke-width="1" />
+  <g fill="#eeeeee" transform="translate(399 244) scale(.8)">
+    <path d="M10 1 V24 L14 25 V5 C19 6 20 8 20 11 C20 14 18 15 16 14 V18 C23 20 27 15 25 9 C24 4 18 2 10 1Z" />
+    <path d="M8 17 L2 19 C-3 21-2 24 3 25 L8 26 V23 L4 22 L8 21Z M16 21 L23 19 C28 18 32 20 29 22 L17 27 L17 24 L25 21 L21 21 L16 23Z" />
   </g>
-
-  <!-- Speaker grille -->
-  <g fill="#0f1013">
-    <circle cx="380" cy="200" r="2"/><circle cx="390" cy="200" r="2"/><circle cx="400" cy="200" r="2"/>
-    <circle cx="410" cy="200" r="2"/><circle cx="420" cy="200" r="2"/><circle cx="430" cy="200" r="2"/><circle cx="440" cy="200" r="2"/>
-    <circle cx="385" cy="208" r="2"/><circle cx="395" cy="208" r="2"/><circle cx="405" cy="208" r="2"/>
-    <circle cx="415" cy="208" r="2"/><circle cx="425" cy="208" r="2"/><circle cx="435" cy="208" r="2"/>
-    <circle cx="390" cy="216" r="2"/><circle cx="400" cy="216" r="2"/><circle cx="410" cy="216" r="2"/>
-    <circle cx="420" cy="216" r="2"/><circle cx="430" cy="216" r="2"/>
+  <g transform="rotate(0 210 163)">
+    <path d="M196 121 Q196 117 201 117 H219 Q224 117 224 122 L223 143 Q223 146 220 149 L210 159 L200 149 Q197 146 197 143Z" fill="#292929" stroke="#dddddd" stroke-width="1" />
   </g>
-
-  <!-- PS button -->
-  <circle cx="410" cy="238" r="13" fill="url(#btn)" stroke="#0c0c0e" stroke-width="1.2"/>
-  <text x="410" y="242.5" font-family="sans-serif" font-size="10" font-weight="700" fill="#a0a3ab" text-anchor="middle" font-style="italic">PS</text>
-
-  <!-- D-pad -->
-  <g>
-    <path d="M159,139 h22 v25 l25,0 v22 h-25 v25 h-22 v-25 h-25 v-22 h25 z"
-          fill="url(#btn)" stroke="#0c0c0e" stroke-width="1.5" stroke-linejoin="round"/>
-    <circle cx="170" cy="175" r="9" fill="#000" fill-opacity="0.25"/>
-    <g fill="#8f929a">
-      <path d="M170,146 l5,8 h-10 z"/>
-      <path d="M170,204 l-5,-8 h10 z"/>
-      <path d="M141,175 l8,-5 v10 z"/>
-      <path d="M199,175 l-8,-5 v10 z"/>
-    </g>
+  <g transform="rotate(90 210 163)">
+    <path d="M196 121 Q196 117 201 117 H219 Q224 117 224 122 L223 143 Q223 146 220 149 L210 159 L200 149 Q197 146 197 143Z" fill="#292929" stroke="#dddddd" stroke-width="1" />
   </g>
-
-  <!-- Face buttons -->
-  <g stroke="#0c0c0e" stroke-width="1.5">
-    <circle cx="650" cy="135" r="17" fill="url(#btn)"/>
-    <circle cx="650" cy="215" r="17" fill="url(#btn)"/>
-    <circle cx="610" cy="175" r="17" fill="url(#btn)"/>
-    <circle cx="690" cy="175" r="17" fill="url(#btn)"/>
+  <g transform="rotate(180 210 163)">
+    <path d="M196 121 Q196 117 201 117 H219 Q224 117 224 122 L223 143 Q223 146 220 149 L210 159 L200 149 Q197 146 197 143Z" fill="#292929" stroke="#dddddd" stroke-width="1" />
   </g>
-  <g fill="none" stroke-width="2.2" stroke-linecap="round">
-    <path d="M650,126 l8,15 h-16 z" stroke="#3fbf9a"/>
-    <path d="M644,209 l12,12 M656,209 l-12,12" stroke="#6ea6ff"/>
-    <rect x="603" y="168" width="14" height="14" stroke="#e58fc0"/>
-    <circle cx="690" cy="175" r="7" stroke="#ff6b6b"/>
+  <g transform="rotate(270 210 163)">
+    <path d="M196 121 Q196 117 201 117 H219 Q224 117 224 122 L223 143 Q223 146 220 149 L210 159 L200 149 Q197 146 197 143Z" fill="#292929" stroke="#dddddd" stroke-width="1" />
   </g>
-
-  <!-- Stick wells -->
-  <g stroke="#0a0a0c" stroke-width="1.5">
-    <circle cx="285" cy="250" r="36" fill="url(#well)"/>
-    <circle cx="535" cy="250" r="36" fill="url(#well)"/>
+  <circle cx="610" cy="123" r="21" fill="#292929" stroke="#dddddd" stroke-opacity=".65" stroke-width="1" />
+  <circle cx="610" cy="203" r="21" fill="#292929" stroke="#dddddd" stroke-opacity=".65" stroke-width="1" />
+  <circle cx="570" cy="163" r="21" fill="#292929" stroke="#dddddd" stroke-opacity=".65" stroke-width="1" />
+  <circle cx="650" cy="163" r="21" fill="#292929" stroke="#dddddd" stroke-opacity=".65" stroke-width="1" />
+  <g fill="none" stroke-width="2" stroke-linejoin="round">
+    <path d="M610 114 L619 130 H601Z" stroke="#dddddd" stroke-width="1" />
+    <circle cx="650" cy="163" r="9" stroke="#dddddd" stroke-width="1" />
+    <path d="M603 196 L617 210 M617 196 L603 210" stroke="#dddddd" stroke-width="1" />
+    <rect x="562" y="155" width="16" height="16" stroke="#dddddd" stroke-width="1" />
   </g>
+  <circle cx="315" cy="253" r="45" fill="#1c1c1c" stroke="#999999" stroke-width=".8" />
+  <circle cx="315" cy="253" r="35" fill="#858585" stroke="#dddddd" stroke-width="1" />
+  <circle cx="505" cy="253" r="45" fill="#1c1c1c" stroke="#999999" stroke-width=".8" />
+  <circle cx="505" cy="253" r="35" fill="#858585" stroke="#dddddd" stroke-width="1" />
 </svg>

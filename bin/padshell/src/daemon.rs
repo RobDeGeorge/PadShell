@@ -4,13 +4,14 @@ use std::sync::Arc;
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
+use padshell_core::ControllerState;
 use padshell_binding::{BindingEngine, Config, EngineAction, HapticsMode, HapticsState};
-use padshell_hid::device::{self, BusType, HidrawDevice, HidrawInfo};
-use padshell_hid::ds4::{Ds4BtParser, Ds4UsbParser, DS4_PRODUCT_ID_V1, DS4_PRODUCT_ID_V2, DS4_VENDOR_ID};
-use padshell_hid::{battery, AnimationHandle, ControllerReportParser, HapticsController, LightbarAnimation};
+use padshell_hid::controller::{self, ControllerInfo};
+use padshell_hid::{AnimationHandle, HapticsController, LightbarAnimation};
 use padshell_output::OutputSink;
 
 use crate::config_watch::ConfigWatcher;
+use crate::focus::FocusWatcher;
 
 /// How often the supervisor re-scans hidraw devices for controllers that
 /// have newly appeared or gone away. A controller unplug/replug (or a
@@ -19,6 +20,16 @@ const SCAN_INTERVAL: Duration = Duration::from_millis(750);
 
 /// How often a worker re-reads its controller's battery level.
 const BATTERY_POLL: Duration = Duration::from_secs(15);
+
+/// Longest a worker blocks waiting for input before checking for config
+/// reloads / battery. Only matters for pads that go quiet when idle
+/// (evdev/Xbox) - a DS4 streams reports far faster than this.
+const READ_TIMEOUT: Duration = Duration::from_millis(200);
+
+/// Longest gap a single tick integrates stick motion over. A pad that
+/// was idle (or a stalled read) would otherwise turn the whole gap into
+/// one cursor jump on the next report.
+const MAX_TICK_DT: Duration = Duration::from_millis(50);
 
 pub struct RunOptions {
     /// Root config directory (default `~/.config/padshell`). Each
@@ -43,10 +54,11 @@ pub fn run(opts: RunOptions) -> anyhow::Result<()> {
     migrate_legacy_config(&opts.config_dir)?;
 
     let sink = Arc::new(OutputSink::create()?);
+    let focus = FocusWatcher::spawn();
     let mut workers: HashMap<String, JoinHandle<()>> = HashMap::new();
 
     loop {
-        let connected = find_controllers();
+        let connected = controller::enumerate();
 
         // Reap workers for controllers that disconnected (or whose read
         // loop errored out) since the last scan.
@@ -65,13 +77,21 @@ pub fn run(opts: RunOptions) -> anyhow::Result<()> {
             if workers.contains_key(&device_id) {
                 continue;
             }
-            tracing::info!(device_id, path = ?info.path, bus = ?info.bus, "controller connected");
+            tracing::info!(
+                device_id,
+                kind = %info.kind.as_str(),
+                name = %info.name,
+                path = ?info.input_path(),
+                bus = ?info.bus,
+                "controller connected"
+            );
 
             let config_dir = opts.config_dir.clone();
             let sink = Arc::clone(&sink);
+            let focus = focus.clone();
             let id_for_thread = device_id.clone();
             let handle = std::thread::spawn(move || {
-                if let Err(err) = run_worker(&info, &id_for_thread, &config_dir, sink) {
+                if let Err(err) = run_worker(&info, &id_for_thread, &config_dir, sink, &focus) {
                     tracing::warn!(device_id = %id_for_thread, error = %err, "controller worker exited");
                 }
             });
@@ -82,32 +102,24 @@ pub fn run(opts: RunOptions) -> anyhow::Result<()> {
     }
 }
 
-/// Enumerates every currently-connected controller this build knows how
-/// to parse. Currently just DS4 - extending to another controller is
-/// adding its vendor/product IDs here and a matching arm in
-/// `parser_for`.
-fn find_controllers() -> Vec<HidrawInfo> {
-    let mut candidates = device::find_all(DS4_VENDOR_ID, DS4_PRODUCT_ID_V1).unwrap_or_default();
-    candidates.extend(device::find_all(DS4_VENDOR_ID, DS4_PRODUCT_ID_V2).unwrap_or_default());
-    candidates
-}
-
-fn parser_for(info: &HidrawInfo) -> Box<dyn ControllerReportParser> {
-    match info.bus {
-        BusType::Bluetooth => Box::new(Ds4BtParser::new()),
-        _ => Box::new(Ds4UsbParser::new()),
-    }
-}
-
 /// Runs one controller's whole lifecycle: load/create its profile, watch
 /// it for hot-reload, reapply its saved lightbar state, then read and
 /// dispatch reports until the device errors out (typically because it
 /// was unplugged), at which point this returns and the supervisor reaps
 /// it - reconnecting later spawns a fresh worker that repeats all of
 /// this, which is what makes reconnect naturally reapply saved state.
-fn run_worker(info: &HidrawInfo, device_id: &str, config_dir: &Path, sink: Arc<OutputSink>) -> anyhow::Result<()> {
-    let (config, profile_path) = Config::load_or_init_profile(config_dir, device_id)
+fn run_worker(
+    info: &ControllerInfo,
+    device_id: &str,
+    config_dir: &Path,
+    sink: Arc<OutputSink>,
+    focus: &FocusWatcher,
+) -> anyhow::Result<()> {
+    let (mut config, profile_path) = Config::load_or_init_profile(config_dir, device_id)
         .map_err(|e| anyhow::anyhow!("failed to load profile for {device_id}: {e}"))?;
+    if let Err(err) = config.ensure_device_identity(&profile_path, info.vendor_id, info.product_id, info.kind, &info.name) {
+        tracing::warn!(device_id, error = %err, "could not record controller kind in profile");
+    }
 
     let mut lightbar = Lightbar::new(info);
     let mut battery_state = BatteryMonitor::new(info);
@@ -116,46 +128,82 @@ fn run_worker(info: &HidrawInfo, device_id: &str, config_dir: &Path, sink: Arc<O
     let mut engine = BindingEngine::new(config);
     let mut watcher = ConfigWatcher::new(&profile_path)?;
 
-    let parser = parser_for(info);
-    let mut hidraw = HidrawDevice::open(&info.path)?;
-    let mut buf = vec![0u8; parser.report_len()];
+    // Opened without grabbing: RetroArch/SDL/Steam read the same node.
+    let mut source = info.open()?;
     let mut last_tick = Instant::now();
+    let mut last_state = ControllerState::default();
+    let mut paused = false;
 
     loop {
         if let Some(new_config) = watcher.poll_reload() {
             tracing::info!(device_id, "config changed, reloading");
-            engine.reload(new_config);
+            let releases = engine.reload(new_config);
+            dispatch(releases, &sink, device_id);
             battery_state.force_refresh(engine.config(), &mut lightbar, device_id);
         }
 
-        let n = hidraw.read_report(&mut buf)?;
-        let Some(state) = parser.parse(&buf[..n]) else {
-            tracing::trace!(device_id, len = n, "discarded unparseable report");
-            continue;
-        };
-
         let now = Instant::now();
-        let dt = now.duration_since(last_tick);
-        last_tick = now;
-
         if battery_state.due(now) {
             battery_state.refresh(engine.config(), &mut lightbar, device_id);
         }
 
-        let actions = engine.tick(&state, dt);
-        for action in actions {
-            match action {
-                EngineAction::Emit(event) => {
-                    if let Err(err) = sink.apply(&event) {
-                        tracing::warn!(device_id, error = %err, "failed to emit output event");
-                    }
-                }
-                EngineAction::PlayMacro(items) => {
-                    let sink = Arc::clone(&sink);
-                    std::thread::spawn(move || play_macro(sink, items));
-                }
-                EngineAction::Launch(command) => launch(device_id, &command),
+        // A focused game reads the pad itself, so stand down: one neutral
+        // tick releases any held mouse button, then nothing is emitted
+        // until focus moves elsewhere. Buttons still held at that point
+        // are not treated as fresh presses.
+        let should_pause = focus.matches(&engine.config().settings.pause_when_focused);
+        if should_pause != paused {
+            paused = should_pause;
+            tracing::info!(device_id, paused, "focused window changed padshell output");
+            if paused {
+                let releases = engine.tick(&ControllerState::default(), Duration::ZERO);
+                dispatch(releases, &sink, device_id);
+            } else {
+                engine.sync_buttons(last_state.buttons);
             }
+        }
+
+        // Stick-driven mouse motion is integrated over time, so while a
+        // stick is producing it, tick at the configured rate even if the
+        // pad sends nothing new (evdev pads only report changes).
+        let timed = !paused && engine.wants_timed_ticks(&last_state);
+        let timeout = if timed {
+            Duration::from_secs(1) / engine.config().settings.poll_hz.clamp(1, 1000)
+        } else {
+            READ_TIMEOUT
+        };
+        let fresh = source.next_state(timeout)?;
+
+        let now = Instant::now();
+        let dt = now.duration_since(last_tick).min(MAX_TICK_DT);
+        last_tick = now;
+
+        match fresh {
+            Some(state) => last_state = state,
+            None if timed => {}
+            None => continue,
+        }
+        if paused {
+            continue;
+        }
+        dispatch(engine.tick(&last_state, dt), &sink, device_id);
+    }
+}
+
+/// Carries out one tick's worth of engine output.
+fn dispatch(actions: Vec<EngineAction>, sink: &Arc<OutputSink>, device_id: &str) {
+    for action in actions {
+        match action {
+            EngineAction::Emit(event) => {
+                if let Err(err) = sink.apply(&event) {
+                    tracing::warn!(device_id, error = %err, "failed to emit output event");
+                }
+            }
+            EngineAction::PlayMacro(items) => {
+                let sink = Arc::clone(sink);
+                std::thread::spawn(move || play_macro(sink, items));
+            }
+            EngineAction::Launch(command) => launch(device_id, &command),
         }
     }
 }
@@ -195,9 +243,9 @@ struct Lightbar {
 }
 
 impl Lightbar {
-    fn new(info: &HidrawInfo) -> Self {
+    fn new(info: &ControllerInfo) -> Self {
         Lightbar {
-            controller: HapticsController::discover(&info.hid_syspath),
+            controller: info.haptics(),
             animation: None,
             applied: None,
         }
@@ -262,16 +310,16 @@ impl Drop for Lightbar {
 /// Polls the battery and decides which lightbar state should be showing:
 /// the lowest matching battery alert, or the profile's normal state.
 struct BatteryMonitor {
-    hid_syspath: PathBuf,
+    syspath: PathBuf,
     next_poll: Instant,
     /// Index of the alert currently active, if any.
     active_alert: Option<usize>,
 }
 
 impl BatteryMonitor {
-    fn new(info: &HidrawInfo) -> Self {
+    fn new(info: &ControllerInfo) -> Self {
         BatteryMonitor {
-            hid_syspath: info.hid_syspath.clone(),
+            syspath: info.syspath.clone(),
             next_poll: Instant::now(),
             active_alert: None,
         }
@@ -290,7 +338,7 @@ impl BatteryMonitor {
 
     fn refresh(&mut self, config: &Config, lightbar: &mut Lightbar, device_id: &str) {
         self.next_poll = Instant::now() + BATTERY_POLL;
-        let status = battery::read(&self.hid_syspath);
+        let status = padshell_hid::battery::read(&self.syspath);
         let matched = status.filter(|s| !s.charging).and_then(|s| {
             config
                 .battery_alerts
@@ -359,20 +407,14 @@ fn migrate_legacy_config(config_dir: &Path) -> anyhow::Result<()> {
 }
 
 fn run_dump_only(opts: &RunOptions) -> anyhow::Result<()> {
-    let info = find_controllers()
-        .into_iter()
-        .next()
-        .ok_or_else(|| anyhow::anyhow!("no controller found. Run `padshell devices` to list available hidraw devices."))?;
-    let parser = parser_for(&info);
-    tracing::info!(path = ?info.path, bus = ?info.bus, "opening controller");
-    let mut hidraw = HidrawDevice::open(&info.path)?;
-    let mut buf = vec![0u8; parser.report_len()];
+    let info = controller::first()
+        .ok_or_else(|| anyhow::anyhow!("no controller found. Run `padshell devices` to list what was detected."))?;
+    tracing::info!(kind = %info.kind.as_str(), name = %info.name, path = ?info.input_path(), bus = ?info.bus, "opening controller");
+    let mut source = info.open()?;
     let mut last_buttons = padshell_core::ButtonSet::empty();
 
     loop {
-        let n = hidraw.read_report(&mut buf)?;
-        let Some(state) = parser.parse(&buf[..n]) else {
-            tracing::trace!(len = n, "discarded unparseable report");
+        let Some(state) = source.next_state(Duration::from_secs(1))? else {
             continue;
         };
 

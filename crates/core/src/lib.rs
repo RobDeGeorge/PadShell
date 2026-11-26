@@ -72,8 +72,124 @@ impl ButtonId {
         }
     }
 
+    /// Parses a canonical name (`cross`, `l1`, ...) or one of the Xbox /
+    /// generic aliases (`a`, `lb`, `view`, `guide`, ...). Config files
+    /// always store the canonical name; aliases are for hand-edited
+    /// configs written in Xbox vocabulary.
     pub fn from_str(s: &str) -> Option<ButtonId> {
-        Self::ALL.iter().copied().find(|b| b.as_str() == s)
+        Self::ALL
+            .iter()
+            .copied()
+            .find(|b| b.as_str() == s)
+            .or_else(|| Self::from_alias(s))
+    }
+
+    fn from_alias(s: &str) -> Option<ButtonId> {
+        Some(match s {
+            "a" => ButtonId::Cross,
+            "b" => ButtonId::Circle,
+            "x" => ButtonId::Square,
+            "y" => ButtonId::Triangle,
+            "lb" => ButtonId::L1,
+            "rb" => ButtonId::R1,
+            "lt" => ButtonId::L2,
+            "rt" => ButtonId::R2,
+            "ls" | "left_stick" => ButtonId::L3,
+            "rs" | "right_stick" => ButtonId::R3,
+            "back" | "view" | "select" => ButtonId::Share,
+            "start" | "menu" => ButtonId::Options,
+            "guide" | "xbox" | "home" | "mode" => ButtonId::Ps,
+            "capture" | "share_xbox" | "extra" => ButtonId::TouchpadClick,
+            _ => return None,
+        })
+    }
+
+    /// Short label for the button as printed on this kind of controller
+    /// (what the GUI shows on the diagram and in binding lists).
+    pub fn label(&self, kind: ControllerKind) -> &'static str {
+        match kind {
+            ControllerKind::Ds4 => match self {
+                ButtonId::Cross => "✕",
+                ButtonId::Circle => "○",
+                ButtonId::Square => "◻",
+                ButtonId::Triangle => "△",
+                ButtonId::L1 => "L1",
+                ButtonId::R1 => "R1",
+                ButtonId::L2 => "L2",
+                ButtonId::R2 => "R2",
+                ButtonId::L3 => "L3",
+                ButtonId::R3 => "R3",
+                ButtonId::Share => "SHARE",
+                ButtonId::Options => "OPTIONS",
+                ButtonId::Ps => "PS",
+                ButtonId::TouchpadClick => "TOUCHPAD",
+                ButtonId::DpadUp => "▲",
+                ButtonId::DpadDown => "▼",
+                ButtonId::DpadLeft => "◀",
+                ButtonId::DpadRight => "▶",
+            },
+            ControllerKind::Xbox | ControllerKind::Generic => match self {
+                ButtonId::Cross => "A",
+                ButtonId::Circle => "B",
+                ButtonId::Square => "X",
+                ButtonId::Triangle => "Y",
+                ButtonId::L1 => "LB",
+                ButtonId::R1 => "RB",
+                ButtonId::L2 => "LT",
+                ButtonId::R2 => "RT",
+                ButtonId::L3 => "LS",
+                ButtonId::R3 => "RS",
+                ButtonId::Share => if kind == ControllerKind::Xbox { "VIEW" } else { "SELECT" },
+                ButtonId::Options => if kind == ControllerKind::Xbox { "MENU" } else { "START" },
+                ButtonId::Ps => if kind == ControllerKind::Xbox { "XBOX" } else { "HOME" },
+                ButtonId::TouchpadClick => if kind == ControllerKind::Xbox { "SHARE" } else { "EXTRA" },
+                ButtonId::DpadUp => "▲",
+                ButtonId::DpadDown => "▼",
+                ButtonId::DpadLeft => "◀",
+                ButtonId::DpadRight => "▶",
+            },
+        }
+    }
+}
+
+/// Which family of controller a device is, for choosing button labels
+/// in the GUI and which optional features (lightbar, touchpad) exist.
+/// Every kind decodes to the same `ButtonId` vocabulary: an Xbox A is
+/// `Cross`, View is `Share`, the Guide button is `Ps`, and so on, so
+/// one profile format serves every controller.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ControllerKind {
+    Ds4,
+    Xbox,
+    #[default]
+    Generic,
+}
+
+impl ControllerKind {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            ControllerKind::Ds4 => "ds4",
+            ControllerKind::Xbox => "xbox",
+            ControllerKind::Generic => "generic",
+        }
+    }
+
+    pub fn from_str(s: &str) -> Option<ControllerKind> {
+        match s {
+            "ds4" => Some(ControllerKind::Ds4),
+            "xbox" => Some(ControllerKind::Xbox),
+            "generic" => Some(ControllerKind::Generic),
+            _ => None,
+        }
+    }
+
+    pub fn display_name(&self) -> &'static str {
+        match self {
+            ControllerKind::Ds4 => "DualShock 4",
+            ControllerKind::Xbox => "Xbox controller",
+            ControllerKind::Generic => "Gamepad",
+        }
     }
 }
 
@@ -224,6 +340,22 @@ mod tests {
         for &b in ButtonId::ALL {
             assert_eq!(ButtonId::from_str(b.as_str()), Some(b));
         }
+    }
+
+    #[test]
+    fn xbox_aliases_map_onto_canonical_buttons() {
+        assert_eq!(ButtonId::from_str("a"), Some(ButtonId::Cross));
+        assert_eq!(ButtonId::from_str("lb"), Some(ButtonId::L1));
+        assert_eq!(ButtonId::from_str("view"), Some(ButtonId::Share));
+        assert_eq!(ButtonId::from_str("guide"), Some(ButtonId::Ps));
+        assert_eq!(ButtonId::from_str("nope"), None);
+    }
+
+    #[test]
+    fn labels_follow_controller_kind() {
+        assert_eq!(ButtonId::Cross.label(ControllerKind::Ds4), "✕");
+        assert_eq!(ButtonId::Cross.label(ControllerKind::Xbox), "A");
+        assert_eq!(ButtonId::Share.label(ControllerKind::Xbox), "VIEW");
     }
 
     #[test]

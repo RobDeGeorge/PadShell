@@ -1,4 +1,4 @@
-//! Bridges DS4 lightbar/rumble control to QML, plus a small persisted
+//! Bridges controller lightbar/rumble control to QML, plus a small persisted
 //! library of named "effects" (a saved color + rumble combo) so users
 //! can build and replay custom lighting/rumble presets.
 
@@ -8,12 +8,13 @@ use padshell_hid::{AnimationHandle, HapticsController, LightbarAnimation};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
-/// Discovers the haptics controller for whichever DS4 is currently
-/// connected, scoped to that specific device (not "first DS4 anywhere")
-/// so this matches what `persist_haptics` writes to.
+/// Discovers the haptics controller for whichever controller is
+/// currently connected, scoped to that specific device so this matches
+/// what `persist_haptics` writes to. An Xbox pad has rumble but no
+/// lightbar; the Haptics tab hides what the pad lacks.
 fn discover() -> Option<HapticsController> {
     let info = crate::device_profile::current_device()?;
-    Some(HapticsController::discover(&info.hid_syspath))
+    Some(info.haptics())
 }
 
 /// Saves the given lightbar/animation state into the currently-connected
@@ -161,14 +162,14 @@ impl HapticsBridge {
             None => {
                 self.as_mut().set_has_lightbar(false);
                 self.as_mut().set_has_rumble(false);
-                self.as_mut().set_error("no DS4 controller found");
+                self.as_mut().set_error("no controller found");
             }
         }
     }
 
     pub fn set_lightbar(mut self: Pin<&mut Self>, r: i32, g: i32, b: i32) -> bool {
         let Some(haptics) = discover() else {
-            self.as_mut().set_error("no DS4 controller found");
+            self.as_mut().set_error("no controller found");
             return false;
         };
         let (r, g, b) = (clamp_u8(r), clamp_u8(g), clamp_u8(b));
@@ -188,7 +189,7 @@ impl HapticsBridge {
 
     pub fn rumble(mut self: Pin<&mut Self>, weak: i32, strong: i32, duration_ms: i32) -> bool {
         let Some(haptics) = discover() else {
-            self.as_mut().set_error("no DS4 controller found");
+            self.as_mut().set_error("no controller found");
             return false;
         };
         if !haptics.has_rumble() {
@@ -301,7 +302,7 @@ impl HapticsBridge {
         period_ms: i32,
     ) -> bool {
         let Some(haptics) = discover() else {
-            self.as_mut().set_error("no DS4 controller found");
+            self.as_mut().set_error("no controller found");
             return false;
         };
         if !haptics.has_lightbar() {

@@ -1,12 +1,12 @@
 mod config_watch;
 mod daemon;
+mod focus;
 
 use std::path::PathBuf;
 
 use clap::{Parser, Subcommand};
-use padshell_hid::device::{self};
 use padshell_hid::ds4::{Ds4BtParser, Ds4UsbParser};
-use padshell_hid::{ControllerReportParser, HapticsController};
+use padshell_hid::{controller, ControllerReportParser, HapticsController, InputPath};
 
 #[derive(Parser)]
 #[command(name = "padshell", about = "Drive a Linux desktop with a game controller")]
@@ -34,8 +34,13 @@ enum Command {
         #[arg(long, requires = "dump_only")]
         changes_only: bool,
     },
-    /// List hidraw devices and their USB vendor/product IDs.
-    Devices,
+    /// List detected controllers (DS4 via hidraw, Xbox and other
+    /// gamepads via evdev), with the profile id each one maps to.
+    Devices {
+        /// Also list every hidraw node on the system, not just controllers.
+        #[arg(long)]
+        all: bool,
+    },
     /// Decode a raw HID report from a fixture file (raw bytes) and print
     /// the resulting controller state - no hardware required.
     TestReport {
@@ -87,15 +92,37 @@ fn main() -> anyhow::Result<()> {
                 changes_only,
             })
         }
-        Command::Devices => {
-            for info in device::enumerate()? {
+        Command::Devices { all } => {
+            let controllers = controller::enumerate();
+            if controllers.is_empty() {
+                println!("no controllers detected");
+            }
+            for info in &controllers {
+                let via = match &info.input {
+                    InputPath::Hidraw(p) => format!("hidraw {}", p.display()),
+                    InputPath::Evdev(p) => format!("evdev {}", p.display()),
+                };
                 println!(
-                    "{}  vendor={:04x} product={:04x} bus={:?}",
-                    info.path.display(),
+                    "{:<8} {:<32} vendor={:04x} product={:04x} bus={:?}  via {via}\n         profile: devices/{}.toml",
+                    info.kind.as_str(),
+                    info.name,
                     info.vendor_id,
                     info.product_id,
-                    info.bus
+                    info.bus,
+                    info.device_id()
                 );
+            }
+            if all {
+                println!("\nall hidraw nodes:");
+                for info in padshell_hid::device::enumerate()? {
+                    println!(
+                        "{}  vendor={:04x} product={:04x} bus={:?}",
+                        info.path.display(),
+                        info.vendor_id,
+                        info.product_id,
+                        info.bus
+                    );
+                }
             }
             Ok(())
         }
@@ -123,9 +150,7 @@ fn main() -> anyhow::Result<()> {
             Ok(())
         }
         Command::Battery { json } => {
-            let mut infos = device::find_all(padshell_hid::ds4::DS4_VENDOR_ID, padshell_hid::ds4::DS4_PRODUCT_ID_V1)?;
-            infos.extend(device::find_all(padshell_hid::ds4::DS4_VENDOR_ID, padshell_hid::ds4::DS4_PRODUCT_ID_V2)?);
-            let status = infos.iter().find_map(|i| padshell_hid::battery::read(&i.hid_syspath));
+            let status = controller::enumerate().iter().find_map(|i| i.battery());
             match (status, json) {
                 (Some(s), false) => {
                     println!("{}% {}", s.percent, if s.charging { "charging" } else { "discharging" });
@@ -158,7 +183,7 @@ fn main() -> anyhow::Result<()> {
 }
 
 fn find_haptics() -> anyhow::Result<HapticsController> {
-    HapticsController::discover_ds4().ok_or_else(|| anyhow::anyhow!("no DS4 controller found"))
+    HapticsController::discover_first().ok_or_else(|| anyhow::anyhow!("no controller found"))
 }
 
 fn expand_tilde(path: &str) -> PathBuf {
