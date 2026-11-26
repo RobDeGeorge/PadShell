@@ -84,11 +84,57 @@ impl BindingEngine {
         }
     }
 
-    /// Replace the config in place (used for hot reload). Layer switch
-    /// state resets, which is fine - a config edit is a rare, deliberate
-    /// event and stale "held" state across a reload would be surprising.
-    pub fn reload(&mut self, config: Config) {
+    /// Replace the config in place (used for hot reload), returning the
+    /// releases for any mouse buttons the old config was holding down so
+    /// a reload mid-drag can't leave one stuck. Layer switch state
+    /// resets, which is fine - a config edit is a rare, deliberate event
+    /// and stale "held" state across a reload would be surprising. The
+    /// last-seen buttons carry over, so a button that's still held
+    /// doesn't count as a fresh press under the new config.
+    pub fn reload(&mut self, config: Config) -> Vec<EngineAction> {
+        let releases = self
+            .held_mouse_buttons
+            .values()
+            .map(|&mb| EngineAction::Emit(OutputEvent::MouseButtonUp(mb)))
+            .collect();
+        let prev_buttons = self.prev_buttons;
         *self = BindingEngine::new(config);
+        self.prev_buttons = prev_buttons;
+        releases
+    }
+
+    /// Marks `buttons` as already seen, so ones still held don't count
+    /// as fresh presses on the next tick (used when output resumes after
+    /// a pause, during which ticks saw a neutral controller).
+    pub fn sync_buttons(&mut self, buttons: ButtonSet) {
+        self.prev_buttons = buttons;
+    }
+
+    /// True if `state` holds a stick deflected in a way the active layer
+    /// turns into mouse motion or scrolling. Motion is integrated over
+    /// time, so the caller must keep ticking at a steady rate while this
+    /// holds even if the controller sends nothing new (evdev pads only
+    /// report changes, and a stick held still doesn't change).
+    pub fn wants_timed_ticks(&self, state: &ControllerState) -> bool {
+        let Some(layer) = self.layers.iter().rev().find(|l| l.switch.is_active()) else {
+            return false;
+        };
+        let deadzone = self.config.settings.stick_deadzone;
+        let live = |value: f32| apply_deadzone(value, deadzone) != 0.0;
+        let pos = |stick: &str| {
+            StickId::from_str(stick).map(|id| match id {
+                StickId::Left => state.left_stick,
+                StickId::Right => state.right_stick,
+            })
+        };
+        let def = &layer.definition;
+        let mouse = def.stick_mouse.as_ref().and_then(|sm| pos(&sm.stick)).is_some_and(|p| live(p.x) || live(p.y));
+        let scroll = def
+            .scroll
+            .as_ref()
+            .and_then(|sc| pos(&sc.stick).map(|p| if sc.axis == "x" { p.x } else { p.y }))
+            .is_some_and(live);
+        mouse || scroll
     }
 
     pub fn config(&self) -> &Config {
@@ -467,5 +513,69 @@ activate = { button = "l1", mode = "hold" }
         let none = state_with_buttons(&[]);
         let actions = engine.tick(&none, Duration::from_millis(4));
         assert_eq!(actions.len(), 1);
+    }
+
+    const MOUSE_LAYER: &str = r#"
+schema_version = 1
+[[layers]]
+name = "mouse"
+activate = { button = "l1", mode = "hold" }
+stick_mouse = { stick = "right", sensitivity = 900.0 }
+
+  [[layers.bindings]]
+  input = "r2"
+  action = { type = "mouse_button", button = "left" }
+
+[[bindings]]
+input = "cross"
+action = { type = "key", key = "space" }
+"#;
+
+    #[test]
+    fn reload_releases_held_mouse_button_and_does_not_refire_held_buttons() {
+        let mut engine = BindingEngine::new(Config::from_str(MOUSE_LAYER).unwrap());
+        let held = state_with_buttons(&[ButtonId::L1, ButtonId::R2, ButtonId::Cross]);
+        engine.tick(&held, Duration::from_millis(4));
+
+        let releases = engine.reload(Config::from_str(MOUSE_LAYER).unwrap());
+        assert!(matches!(
+            releases.as_slice(),
+            [EngineAction::Emit(OutputEvent::MouseButtonUp(MouseButton::Left))]
+        ));
+
+        // Same buttons still held after the reload: nothing is a new press.
+        assert!(engine.tick(&held, Duration::from_millis(4)).is_empty());
+    }
+
+    #[test]
+    fn sync_buttons_suppresses_press_edges_for_held_buttons() {
+        let mut engine = BindingEngine::new(Config::from_str(MOUSE_LAYER).unwrap());
+        let cross = state_with_buttons(&[ButtonId::Cross]);
+        engine.sync_buttons(cross.buttons);
+        assert!(engine.tick(&cross, Duration::from_millis(4)).is_empty());
+
+        // Released and pressed again -> fires normally.
+        engine.tick(&state_with_buttons(&[]), Duration::from_millis(4));
+        assert_eq!(engine.tick(&cross, Duration::from_millis(4)).len(), 1);
+    }
+
+    #[test]
+    fn timed_ticks_wanted_only_for_live_stick_on_active_layer() {
+        let mut engine = BindingEngine::new(Config::from_str(MOUSE_LAYER).unwrap());
+        let mut state = state_with_buttons(&[]);
+        state.right_stick.x = 0.9;
+
+        // Stick deflected but the mouse layer isn't active.
+        engine.tick(&state, Duration::from_millis(4));
+        assert!(!engine.wants_timed_ticks(&state));
+
+        state.buttons.set(ButtonId::L1, true);
+        engine.tick(&state, Duration::from_millis(4));
+        assert!(engine.wants_timed_ticks(&state));
+
+        // Inside the deadzone, and the stick the layer doesn't use.
+        state.right_stick.x = 0.01;
+        state.left_stick.y = 0.9;
+        assert!(!engine.wants_timed_ticks(&state));
     }
 }
